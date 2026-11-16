@@ -527,6 +527,7 @@ class IntASTnode : public ASTnode {
 public:
   IntASTnode(TOKEN tok, int val) : Val(val), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
+  Value *codegen() override; // generates LLVM IR for this node (defined in Code Generation)
   std::string to_string() const override {
     return "IntLiteral " + std::to_string(Val);
   }
@@ -540,6 +541,7 @@ class BoolASTnode : public ASTnode {
 public:
   BoolASTnode(TOKEN tok, bool B) : Bool(B), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
+  Value *codegen() override; // generates LLVM IR for this node (defined in Code Generation)
   std::string to_string() const override { return "BoolLiteral " + Tok.lexeme; }
 };
 
@@ -551,6 +553,7 @@ class FloatASTnode : public ASTnode {
 public:
   FloatASTnode(TOKEN tok, double Val) : Val(Val), Tok(tok) {}
   const std::string &getType() const { return Tok.lexeme; }
+  Value *codegen() override; // generates LLVM IR for this node (defined in Code Generation)
   std::string to_string() const override {
     return "FloatLiteral " + Tok.lexeme;
   }
@@ -642,6 +645,7 @@ public:
   const std::string &getType() const { return Type; }
   int getSize() const { return Params.size(); }
   const TOKEN &getTok() const { return Tok; }
+  Function *codegen(); // builds the signature; not an ASTnode, so no override
   std::vector<std::unique_ptr<ParamAST>> &getParams() { return Params; }
 
   // header line, e.g. "FunctionDecl 'add' -> int"
@@ -716,6 +720,8 @@ public:
   BlockAST(std::vector<std::unique_ptr<VarDeclAST>> localDecls,
            std::vector<std::unique_ptr<ASTnode>> stmts)
       : LocalDecls(std::move(localDecls)), Stmts(std::move(stmts)) {}
+  Value *codegen() override; // a nested { } block: opens its own scope
+  Value *codegenInScope();   // the contents only, in a scope the caller opened
   std::string to_string() const override {
     std::vector<std::string> kids;
     for (const auto &decl : LocalDecls)
@@ -737,6 +743,7 @@ public:
   FunctionDeclAST(std::unique_ptr<FunctionPrototypeAST> Proto,
                   std::unique_ptr<ASTnode> Block)
       : Proto(std::move(Proto)), Block(std::move(Block)) {}
+  Value *codegen() override; // generates LLVM IR for this node (defined in Code Generation)
   std::string to_string() const override {
     // parameters and body are siblings under the function node
     std::vector<std::string> kids = Proto->paramStrings();
@@ -788,6 +795,7 @@ class ReturnAST : public ASTnode {
 public:
   ReturnAST(TOKEN tok, std::unique_ptr<ASTnode> value)
       : Tok(tok), Val(std::move(value)) {}
+  Value *codegen() override; // generates LLVM IR for this node (defined in Code Generation)
   std::string to_string() const override {
     if (!Val)
       return "Return (void)";
@@ -825,6 +833,7 @@ public:
   ProgramAST(std::vector<std::unique_ptr<FunctionPrototypeAST>> externs,
              std::vector<std::unique_ptr<ASTnode>> decls)
       : Externs(std::move(externs)), Decls(std::move(decls)) {}
+  Value *codegen() override; // generates LLVM IR for this node (defined in Code Generation)
   std::string to_string() const override {
     std::vector<std::string> kids;
     for (const auto &ext : Externs)
@@ -1790,6 +1799,305 @@ static LLVMContext TheContext;
 static IRBuilder<> Builder(TheContext);
 static std::unique_ptr<Module> TheModule;
 
+/// SemanticError - Report a semantic error with its kind (type, scope, arity,
+/// undeclared name) and source position, then stop.
+static Value *SemanticError(const TOKEN &tok, const char *kind,
+                            const std::string &msg) {
+  fprintf(stderr, "%d:%d Semantic error (%s): %s\n", tok.lineNo, tok.columnNo,
+          kind, msg.c_str());
+  exit(2);
+  return nullptr;
+}
+
+// The three MiniC value types as LLVM types.
+static Type *IntTy() { return Type::getInt32Ty(TheContext); }
+static Type *FloatTy() { return Type::getFloatTy(TheContext); }
+static Type *BoolTy() { return Type::getInt1Ty(TheContext); }
+
+/// typeFromName - MiniC type name ("int", "float", "bool", "void") to LLVM type.
+static Type *typeFromName(const std::string &name) {
+  if (name == "int")
+    return IntTy();
+  if (name == "float")
+    return FloatTy();
+  if (name == "bool")
+    return BoolTy();
+  return Type::getVoidTy(TheContext);
+}
+
+/// typeName - LLVM type back to its MiniC name, for error messages.
+static std::string typeName(Type *T) {
+  if (T->isIntegerTy(1))
+    return "bool";
+  if (T->isIntegerTy(32))
+    return "int";
+  if (T->isFloatTy())
+    return "float";
+  return "void";
+}
+
+/// typeRank - Position in the widening order bool < int < float.
+/// void is not a value type and has rank -1.
+static int typeRank(Type *T) {
+  if (T->isIntegerTy(1))
+    return 0;
+  if (T->isIntegerTy(32))
+    return 1;
+  if (T->isFloatTy())
+    return 2;
+  return -1;
+}
+
+/// widen - Convert V to type To if that is a widening conversion
+/// (bool -> int -> float). Returns nullptr if it would be a narrowing
+/// conversion, which MiniC does not allow, then the caller reports the error.
+static Value *widen(Value *V, Type *To) {
+  Type *From = V->getType();
+  if (From == To)
+    return V;
+  if (typeRank(From) < 0 || typeRank(From) > typeRank(To))
+    return nullptr;
+  if (To->isFloatTy()) {
+    if (From->isIntegerTy(1))
+      return Builder.CreateUIToFP(V, To, "booltofp"); // true -> 1.0
+    return Builder.CreateSIToFP(V, To, "inttofp");
+  }
+  return Builder.CreateZExt(V, To, "booltoint"); // true -> 1
+}
+
+/// toBool - The truth value of V as an i1: zero is false and anything else
+/// is true (C rules). Used for conditions and for the operands of && || !.
+static Value *toBool(Value *V) {
+  Type *T = V->getType();
+  if (T->isIntegerTy(1))
+    return V;
+  if (T->isFloatTy())
+    return Builder.CreateFCmpUNE(V, ConstantFP::get(T, 0.0), "tobool");
+  return Builder.CreateICmpNE(V, ConstantInt::get(T, 0), "tobool");
+}
+
+/// requireValue - An operand must produce a value. A call to a void function
+/// does not, so using one inside an expression is a type error.
+static Value *requireValue(Value *V, const TOKEN &tok,
+                           const std::string &what) {
+  if (!V || V->getType()->isVoidTy())
+    return SemanticError(tok, "type", what + " is void: it has no value");
+  return V;
+}
+
+/// Local variables: one map per open scope, innermost scope at the back.
+static std::vector<std::map<std::string, AllocaInst *>> Scopes;
+/// Global variables.
+static std::map<std::string, GlobalVariable *> GlobalNamedValues;
+
+/// VarInfo - Where a variable is stored and the type stored there.
+struct VarInfo {
+  Value *Ptr = nullptr;
+  Type *Ty = nullptr;
+};
+
+/// lookupVariable - Find the declaration a name refers to: search the open
+/// scopes from the innermost outwards, then the globals. Ptr stays null if
+/// the name is not declared.
+static VarInfo lookupVariable(const std::string &name) {
+  VarInfo info;
+  for (int i = (int)Scopes.size() - 1; i >= 0; i--) {
+    auto it = Scopes[i].find(name);
+    if (it != Scopes[i].end()) {
+      info.Ptr = it->second;
+      info.Ty = it->second->getAllocatedType();
+      return info;
+    }
+  }
+  auto g = GlobalNamedValues.find(name);
+  if (g != GlobalNamedValues.end()) {
+    info.Ptr = g->second;
+    info.Ty = g->second->getValueType();
+  }
+  return info;
+}
+
+/// CreateEntryBlockAlloca - Reserve a stack slot in the entry block of F.
+/// Allocas go in the entry block so each runs once per call (not once per
+/// loop iteration) and so mem2reg can promote them to registers.
+static AllocaInst *CreateEntryBlockAlloca(Function *F, const std::string &name,
+                                          Type *Ty) {
+  IRBuilder<> TmpB(&F->getEntryBlock(), F->getEntryBlock().begin());
+  return TmpB.CreateAlloca(Ty, nullptr, name);
+}
+
+/// declareLocal - Add a local variable to the innermost scope. Declaring the
+/// same name twice in one scope is an error; hiding an outer one is allowed.
+static AllocaInst *declareLocal(const TOKEN &tok, const std::string &name,
+                                Type *Ty) {
+  if (Scopes.back().count(name) > 0)
+    SemanticError(tok, "scope",
+                  "redeclaration of '" + name + "' in the same scope");
+  Function *F = Builder.GetInsertBlock()->getParent();
+  AllocaInst *Slot = CreateEntryBlockAlloca(F, name, Ty);
+  Scopes.back()[name] = Slot;
+  return Slot;
+}
+
+//===----------------------------------------------------------------------===//
+// Code Generation - literals, functions, blocks, return, program 
+//===----------------------------------------------------------------------===//
+
+// A literal is a constant, not an instruction.
+Value *IntASTnode::codegen() { return ConstantInt::get(IntTy(), Val, true); }
+
+Value *FloatASTnode::codegen() { return ConstantFP::get(FloatTy(), Val); }
+
+Value *BoolASTnode::codegen() { return ConstantInt::get(BoolTy(), Bool); }
+
+/// Function signature. Used for extern declarations and as the first half of
+/// a function definition.
+Function *FunctionPrototypeAST::codegen() {
+  std::vector<llvm::Type *> ParamTys;
+  for (const auto &Param : Params)
+    ParamTys.push_back(typeFromName(Param->getType()));
+  llvm::Type *RetTy = typeFromName(Type);
+  FunctionType *FT = FunctionType::get(RetTy, ParamTys, false);
+
+  // Declared before (an earlier extern)? The signature must be the same.
+  if (Function *Existing = TheModule->getFunction(Name)) {
+    if (Existing->getFunctionType() != FT)
+      SemanticError(Tok, "type",
+                    "conflicting declarations of function '" + Name + "'");
+    return Existing;
+  }
+  if (GlobalNamedValues.count(Name) > 0)
+    SemanticError(Tok, "scope",
+                  "'" + Name + "' is already declared as a global variable");
+
+  // ExternalLinkage: callable by name from the C++ driver, and a declaration
+  // with no body is resolved by the linker.
+  Function *F =
+      Function::Create(FT, Function::ExternalLinkage, Name, TheModule.get());
+
+  // A bool is passed in a full register. zeroext says the upper bits are 0,
+  // which is what C++ code on the other side of the call expects.
+  if (RetTy->isIntegerTy(1))
+    F->addRetAttr(Attribute::ZExt);
+  unsigned Idx = 0;
+  for (auto &Arg : F->args()) {
+    Arg.setName(Params[Idx]->getName());
+    if (Arg.getType()->isIntegerTy(1))
+      Arg.addAttr(Attribute::ZExt);
+    Idx++;
+  }
+  return F;
+}
+
+/// Function definition: signature, then the body.
+Value *FunctionDeclAST::codegen() {
+  Function *F = Proto->codegen();
+  if (!F->empty())
+    return SemanticError(Proto->getTok(), "scope",
+                         "redefinition of function '" + Proto->getName() + "'");
+
+  BasicBlock *EntryBB = BasicBlock::Create(TheContext, "entry", F);
+  Builder.SetInsertPoint(EntryBB);
+
+  // The function's scope holds the parameters and the body's declarations.
+  Scopes.push_back({});
+  unsigned Idx = 0;
+  for (auto &Arg : F->args()) {
+    // Use this definition's parameter names (an earlier extern may differ).
+    const std::string &ParamName = Proto->getParams()[Idx]->getName();
+    Arg.setName(ParamName);
+    // Parameters arrive as SSA values. Copy each into a stack slot so the
+    // body can assign to it like any other variable.
+    AllocaInst *Slot = declareLocal(Proto->getTok(), ParamName, Arg.getType());
+    Builder.CreateStore(&Arg, Slot);
+    Idx++;
+  }
+
+  static_cast<BlockAST *>(Block.get())->codegenInScope();
+  Scopes.pop_back();
+
+  // Every block needs a terminator. If control can reach the end of the body
+  // without a 'return', return void or, for a value function, zero.
+  if (F->getReturnType()->isVoidTy())
+    Builder.CreateRetVoid();
+  else
+    Builder.CreateRet(Constant::getNullValue(F->getReturnType()));
+
+  // Drop the blocks nothing jumps to (code after a 'return'), then let LLVM
+  // check the function is well formed.
+  EliminateUnreachableBlocks(*F);
+  if (verifyFunction(*F, &errs())) {
+    fprintf(stderr, "Internal compiler error: invalid IR for function '%s'\n",
+            Proto->getName().c_str());
+    exit(3);
+  }
+  return F;
+}
+
+/// { decls stmts } as a nested block: its declarations get their own scope.
+Value *BlockAST::codegen() {
+  Scopes.push_back({});
+  codegenInScope();
+  Scopes.pop_back();
+  return nullptr;
+}
+
+/// The contents of a block, generated into the scope that is already open.
+/// A function body uses this directly, because parameters and the body's own
+/// declarations share one scope.
+Value *BlockAST::codegenInScope() {
+  for (const auto &Decl : LocalDecls)
+    Decl->codegen();
+  for (const auto &Stmt : Stmts)
+    Stmt->codegen();
+  return nullptr;
+}
+
+/// return; and return e;
+Value *ReturnAST::codegen() {
+  Function *F = Builder.GetInsertBlock()->getParent();
+  llvm::Type *RetTy = F->getReturnType();
+
+  if (!Val) {
+    if (!RetTy->isVoidTy())
+      return SemanticError(Tok, "type",
+                           "function '" + F->getName().str() + "' returns " +
+                               typeName(RetTy) + ": 'return' needs a value");
+    Builder.CreateRetVoid();
+  } else {
+    if (RetTy->isVoidTy())
+      return SemanticError(Tok, "type",
+                           "void function '" + F->getName().str() +
+                               "' cannot return a value");
+    Value *V = requireValue(Val->codegen(), Tok, "the returned expression");
+    Value *Widened = widen(V, RetTy);
+    if (!Widened)
+      return SemanticError(Tok, "type",
+                           "cannot return " + typeName(V->getType()) +
+                               " from function '" + F->getName().str() +
+                               "' returning " + typeName(RetTy) +
+                               " (narrowing conversion)");
+    Builder.CreateRet(Widened);
+  }
+
+  // A block must end at its terminator. Anything generated after this
+  // 'return' goes into a fresh block that nothing jumps to.
+  BasicBlock *DeadBB = BasicBlock::Create(TheContext, "after.ret", F);
+  Builder.SetInsertPoint(DeadBB);
+  return nullptr;
+}
+
+/// The whole program: extern declarations first, then each top-level
+/// declaration in source order (so a name is only visible after its
+/// declaration).
+Value *ProgramAST::codegen() {
+  for (const auto &Ext : Externs)
+    Ext->codegen();
+  for (const auto &Decl : Decls)
+    Decl->codegen();
+  return nullptr;
+}
+
 //===----------------------------------------------------------------------===//
 // AST Printer
 //===----------------------------------------------------------------------===//
@@ -1838,6 +2146,14 @@ int main(int argc, char **argv) {
   llvm::outs() << *RootASTnode << "\n";
   llvm::outs() << "********************* AST (end) ***********************\n";
   llvm::outs().flush();
+
+  // Part 2: generate LLVM IR for the whole program. A semantic error prints
+  // a message and exits with a non-zero status inside codegen().
+  RootASTnode->codegen();
+  if (verifyModule(*TheModule, &errs())) {
+    fprintf(stderr, "Internal compiler error: the generated module is invalid\n");
+    return 3;
+  }
 
   printf(
       "********************* FINAL IR (begin) ****************************\n");

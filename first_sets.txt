@@ -1,0 +1,43 @@
+program      { "bool", "extern", "float", "int", "void" }
+extern_list  { "extern", ε }
+extern       { "extern" }
+decl_list    { "bool", "float", "int", "void" }
+decl_list'   { "bool", "float", "int", "void", ε }
+decl         { "bool", "float", "int", "void" }
+decl_tail    { "(", ";" }
+type_spec    { "bool", "float", "int", "void" }
+var_type     { "bool", "float", "int" }
+params       { "bool", "float", "int", "void", ε }
+param_list   { "bool", "float", "int" }
+param_list'  { ",", ε }
+param        { "bool", "float", "int" }
+block        { "{" }
+local_decls  { "bool", "float", "int", ε }
+local_decl   { "bool", "float", "int" }
+stmt_list    { "!", "(", "-", ";", "if", "return", "while", "{", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT, ε }
+stmt         { "!", "(", "-", ";", "if", "return", "while", "{", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+expr_stmt    { "!", "(", "-", ";", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+while_stmt   { "while" }
+if_stmt      { "if" }
+else_stmt    { "else", ε }
+return_stmt  { "return" }
+return_tail  { "!", "(", "-", ";", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+expr         { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+rval         { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+rval'        { "||", ε }
+and_expr     { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+and_expr'    { "&&", ε }
+eq_expr      { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+eq_expr'     { "!=", "==", ε }
+rel_expr     { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+rel_expr'    { "<", "<=", ">", ">=", ε }
+add_expr     { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+add_expr'    { "+", "-", ε }
+mul_expr     { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+mul_expr'    { "%", "*", "/", ε }
+unary_expr   { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+primary      { "(", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+ident_tail   { "(", ε }
+args         { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT, ε }
+arg_list     { "!", "(", "-", IDENT, INT_LIT, FLOAT_LIT, BOOL_LIT }
+arg_list'    { ",", ε }

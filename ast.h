@@ -164,6 +164,7 @@ public:
       : Var(std::move(var)), Type(type) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
+  llvm::Value *codegen() override; // Step 8: create the global
   std::string to_string() const override {
     return "GlobalVarDecl " + Type + " '" + Var->getName() + "'";
   }
@@ -223,6 +224,7 @@ public:
       : Node1(std::move(node1)), Tok(opTok), Op(opTok.type),
         Node2(std::move(node2)) {}
   llvm::Value *codegen() override; // Step 4: arithmetic and comparisons
+  llvm::Value *codegenLogical();   // Step 7: short-circuit && and ||
   std::string to_string() const override {
     return treeNode("BinaryOp '" + opToString(Op) + "'",
                     {nodeToString(Node1.get()), nodeToString(Node2.get())});
@@ -314,6 +316,7 @@ public:
             std::unique_ptr<ASTnode> Then, std::unique_ptr<ASTnode> Else)
       : Tok(tok), Cond(std::move(Cond)), Then(std::move(Then)),
         Else(std::move(Else)) {}
+  llvm::Value *codegen() override; // Step 6: branch on the condition
   std::string to_string() const override {
     std::vector<std::string> kids;
     kids.push_back(labelled("Condition", nodeToString(Cond.get())));
@@ -333,6 +336,7 @@ public:
   WhileExprAST(TOKEN tok, std::unique_ptr<ASTnode> cond,
                std::unique_ptr<ASTnode> body)
       : Tok(tok), Cond(std::move(cond)), Body(std::move(body)) {}
+  llvm::Value *codegen() override; // Step 6: loop back to the condition
   std::string to_string() const override {
     return treeNode("While", {labelled("Condition", nodeToString(Cond.get())),
                               labelled("Body", nodeToString(Body.get()))});
@@ -365,6 +369,7 @@ public:
   ArgsAST(TOKEN tok, const std::string &Callee,
           std::vector<std::unique_ptr<ASTnode>> list)
       : Tok(tok), Callee(Callee), ArgsList(std::move(list)) {}
+  llvm::Value *codegen() override; // Step 5: call the function
   std::string to_string() const override {
     std::vector<std::string> kids;
     for (const auto &arg : ArgsList)

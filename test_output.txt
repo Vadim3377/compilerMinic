@@ -56,5 +56,963 @@ Program
     `-Return
       `-VarRef 'result'
 ********************* AST (end) ***********************
-16:3 Semantic error (type): the returned expression is void: it has no value
+found param in param_list_prime: m
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+18
+18
+
+./add
+PASSED Result: 9
+PASSED Result: 9
+
+Test: factorial
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+`-FunctionDecl 'factorial' -> int
+  |-Param int 'n'
+  `-Block
+    |-VarDecl int 'i'
+    |-VarDecl int 'factorial'
+    |-Assign
+    | |-VarRef 'factorial'
+    | `-IntLiteral 1
+    |-Assign
+    | |-VarRef 'i'
+    | `-IntLiteral 1
+    |-While
+    | |-Condition
+    | | `-BinaryOp '<='
+    | |   |-VarRef 'i'
+    | |   `-VarRef 'n'
+    | `-Body
+    |   `-Block
+    |     |-Assign
+    |     | |-VarRef 'factorial'
+    |     | `-BinaryOp '*'
+    |     |   |-VarRef 'factorial'
+    |     |   `-VarRef 'i'
+    |     `-Assign
+    |       |-VarRef 'i'
+    |       `-BinaryOp '+'
+    |         |-VarRef 'i'
+    |         `-IntLiteral 1
+    `-Return
+      `-VarRef 'factorial'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+
+./fact
+PASSED Result: 3628800
+PASSED Result: 3628800
+
+Test: fibonacci
+Parsed parameter list for external function
+Parsed a top-level external function declaration -- 1
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed an if statment
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed an expression statement
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+|-ExternDecl 'print_int' -> int
+| `-Param int 'X'
+`-FunctionDecl 'fibonacci' -> int
+  |-Param int 'n'
+  `-Block
+    |-VarDecl int 'first'
+    |-VarDecl int 'second'
+    |-VarDecl int 'next'
+    |-VarDecl int 'c'
+    |-VarDecl int 'total'
+    |-Call 'print_int'
+    | `-VarRef 'n'
+    |-Assign
+    | |-VarRef 'first'
+    | `-IntLiteral 0
+    |-Assign
+    | |-VarRef 'second'
+    | `-IntLiteral 1
+    |-Assign
+    | |-VarRef 'c'
+    | `-IntLiteral 1
+    |-Assign
+    | |-VarRef 'total'
+    | `-IntLiteral 0
+    |-While
+    | |-Condition
+    | | `-BinaryOp '<'
+    | |   |-VarRef 'c'
+    | |   `-VarRef 'n'
+    | `-Body
+    |   `-Block
+    |     |-If
+    |     | |-Condition
+    |     | | `-BinaryOp '<='
+    |     | |   |-VarRef 'c'
+    |     | |   `-IntLiteral 1
+    |     | |-Then
+    |     | | `-Block
+    |     | |   `-Assign
+    |     | |     |-VarRef 'next'
+    |     | |     `-VarRef 'c'
+    |     | `-Else
+    |     |   `-Block
+    |     |     |-Assign
+    |     |     | |-VarRef 'next'
+    |     |     | `-BinaryOp '+'
+    |     |     |   |-VarRef 'first'
+    |     |     |   `-VarRef 'second'
+    |     |     |-Assign
+    |     |     | |-VarRef 'first'
+    |     |     | `-VarRef 'second'
+    |     |     `-Assign
+    |     |       |-VarRef 'second'
+    |     |       `-VarRef 'next'
+    |     |-Call 'print_int'
+    |     | `-VarRef 'next'
+    |     |-Assign
+    |     | |-VarRef 'c'
+    |     | `-BinaryOp '+'
+    |     |   |-VarRef 'c'
+    |     |   `-IntLiteral 1
+    |     `-Assign
+    |       |-VarRef 'total'
+    |       `-BinaryOp '+'
+    |         |-VarRef 'total'
+    |         `-VarRef 'next'
+    |-Call 'print_int'
+    | `-VarRef 'total'
+    `-Return
+      `-VarRef 'total'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+10
+1
+1
+2
+3
+5
+8
+13
+21
+34
+88
+10
+1
+1
+2
+3
+5
+8
+13
+21
+34
+88
+
+./fib
+PASSED Result: 88
+PASSED Result: 88
+
+Test: pi
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed an if statment
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+`-FunctionDecl 'pi' -> float
+  `-Block
+    |-VarDecl bool 'flag'
+    |-VarDecl float 'PI'
+    |-VarDecl int 'i'
+    |-Assign
+    | |-VarRef 'flag'
+    | `-BoolLiteral true
+    |-Assign
+    | |-VarRef 'PI'
+    | `-FloatLiteral 3.0
+    |-Assign
+    | |-VarRef 'i'
+    | `-IntLiteral 2
+    |-While
+    | |-Condition
+    | | `-BinaryOp '<'
+    | |   |-VarRef 'i'
+    | |   `-IntLiteral 100
+    | `-Body
+    |   `-Block
+    |     |-If
+    |     | |-Condition
+    |     | | `-VarRef 'flag'
+    |     | |-Then
+    |     | | `-Block
+    |     | |   `-Assign
+    |     | |     |-VarRef 'PI'
+    |     | |     `-BinaryOp '+'
+    |     | |       |-VarRef 'PI'
+    |     | |       `-BinaryOp '/'
+    |     | |         |-FloatLiteral 4.0
+    |     | |         `-BinaryOp '*'
+    |     | |           |-BinaryOp '*'
+    |     | |           | |-VarRef 'i'
+    |     | |           | `-BinaryOp '+'
+    |     | |           |   |-VarRef 'i'
+    |     | |           |   `-IntLiteral 1
+    |     | |           `-BinaryOp '+'
+    |     | |             |-VarRef 'i'
+    |     | |             `-IntLiteral 2
+    |     | `-Else
+    |     |   `-Block
+    |     |     `-Assign
+    |     |       |-VarRef 'PI'
+    |     |       `-BinaryOp '-'
+    |     |         |-VarRef 'PI'
+    |     |         `-BinaryOp '/'
+    |     |           |-FloatLiteral 4.0
+    |     |           `-BinaryOp '*'
+    |     |             |-BinaryOp '*'
+    |     |             | |-VarRef 'i'
+    |     |             | `-BinaryOp '+'
+    |     |             |   |-VarRef 'i'
+    |     |             |   `-IntLiteral 1
+    |     |             `-BinaryOp '+'
+    |     |               |-VarRef 'i'
+    |     |               `-IntLiteral 2
+    |     |-Assign
+    |     | |-VarRef 'flag'
+    |     | `-UnaryOp '!'
+    |     |   `-VarRef 'flag'
+    |     `-Assign
+    |       |-VarRef 'i'
+    |       `-BinaryOp '+'
+    |         |-VarRef 'i'
+    |         `-IntLiteral 2
+    `-Return
+      `-VarRef 'PI'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+
+./pi
+PASSED Result for PI is : 3.141595
+PASSED Result for PI is : 3.141595
+
+Test: while
+Parsed parameter list for external function
+Parsed a top-level external function declaration -- 1
+Parsed a variable declaration
+Parsed a top-level variable or function declaration
+Parsed a variable declaration
+Parsed a top-level variable or function declaration
+Parsed a variable declaration
+Parsed a top-level variable or function declaration
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a while statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+|-ExternDecl 'print_int' -> int
+| `-Param int 'X'
+|-GlobalVarDecl int 'test'
+|-GlobalVarDecl float 'f'
+|-GlobalVarDecl bool 'b'
+`-FunctionDecl 'While' -> int
+  |-Param int 'n'
+  `-Block
+    |-VarDecl int 'result'
+    |-Assign
+    | |-VarRef 'test'
+    | `-BinaryOp '+'
+    |   |-IntLiteral 11
+    |   `-IntLiteral 1
+    |-Assign
+    | |-VarRef 'result'
+    | `-IntLiteral 0
+    |-Call 'print_int'
+    | `-VarRef 'test'
+    |-While
+    | |-Condition
+    | | `-BinaryOp '<'
+    | |   |-VarRef 'result'
+    | |   `-IntLiteral 10
+    | `-Body
+    |   `-Assign
+    |     |-VarRef 'result'
+    |     `-BinaryOp '+'
+    |       |-VarRef 'result'
+    |       `-IntLiteral 1
+    `-Return
+      `-VarRef 'result'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+12
+12
+
+./while
+PASSED Result: 10
+PASSED Result: 10
+
+Test: void
+Parsed parameter list for external function
+Parsed a top-level external function declaration -- 1
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+|-ExternDecl 'print_int' -> int
+| `-Param int 'X'
+`-FunctionDecl 'Void' -> void
+  `-Block
+    |-VarDecl int 'result'
+    |-Assign
+    | |-VarRef 'result'
+    | `-IntLiteral 0
+    |-Call 'print_int'
+    | `-VarRef 'result'
+    |-While
+    | |-Condition
+    | | `-BinaryOp '<'
+    | |   |-VarRef 'result'
+    | |   `-IntLiteral 10
+    | `-Body
+    |   `-Block
+    |     |-Assign
+    |     | |-VarRef 'result'
+    |     | `-BinaryOp '+'
+    |     |   |-VarRef 'result'
+    |     |   `-IntLiteral 1
+    |     `-Call 'print_int'
+    |       `-VarRef 'result'
+    `-Return (void)
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+0
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+
+./void
+PASSED Result 
+PASSED Result 
+
+Test: cosine
+Parsed parameter list for external function
+Parsed a top-level external function declaration -- 1
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed an expression statement
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+|-ExternDecl 'print_float' -> float
+| `-Param float 'X'
+`-FunctionDecl 'cosine' -> float
+  |-Param float 'x'
+  `-Block
+    |-VarDecl float 'cos'
+    |-VarDecl float 'n'
+    |-VarDecl float 'term'
+    |-VarDecl float 'eps'
+    |-VarDecl float 'alt'
+    |-Assign
+    | |-VarRef 'eps'
+    | `-FloatLiteral 0.000001
+    |-Assign
+    | |-VarRef 'n'
+    | `-FloatLiteral 1.0
+    |-Assign
+    | |-VarRef 'cos'
+    | `-FloatLiteral 1.0
+    |-Assign
+    | |-VarRef 'term'
+    | `-FloatLiteral 1.0
+    |-Assign
+    | |-VarRef 'alt'
+    | `-UnaryOp '-'
+    |   `-FloatLiteral 1.0
+    |-While
+    | |-Condition
+    | | `-BinaryOp '>'
+    | |   |-VarRef 'term'
+    | |   `-VarRef 'eps'
+    | `-Body
+    |   `-Block
+    |     |-Assign
+    |     | |-VarRef 'term'
+    |     | `-BinaryOp '/'
+    |     |   |-BinaryOp '/'
+    |     |   | |-BinaryOp '*'
+    |     |   | | |-BinaryOp '*'
+    |     |   | | | |-VarRef 'term'
+    |     |   | | | `-VarRef 'x'
+    |     |   | | `-VarRef 'x'
+    |     |   | `-VarRef 'n'
+    |     |   `-BinaryOp '+'
+    |     |     |-VarRef 'n'
+    |     |     `-IntLiteral 1
+    |     |-Assign
+    |     | |-VarRef 'cos'
+    |     | `-BinaryOp '+'
+    |     |   |-VarRef 'cos'
+    |     |   `-BinaryOp '*'
+    |     |     |-VarRef 'alt'
+    |     |     `-VarRef 'term'
+    |     |-Assign
+    |     | |-VarRef 'alt'
+    |     | `-UnaryOp '-'
+    |     |   `-VarRef 'alt'
+    |     `-Assign
+    |       |-VarRef 'n'
+    |       `-BinaryOp '+'
+    |         |-VarRef 'n'
+    |         `-IntLiteral 2
+    |-Call 'print_float'
+    | `-VarRef 'cos'
+    `-Return
+      `-VarRef 'cos'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+-1.000000
+0.500001
+-0.499999
+
+./cosine
+PASSED Result: 
+PASSED Result: 
+
+Test: unary
+Parsed parameter list for external function
+Parsed a top-level external function declaration -- 1
+Parsed parameter list for external function
+Parsed a top-level external function declaration -- 2
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+|-ExternDecl 'print_int' -> int
+| `-Param int 'X'
+|-ExternDecl 'print_float' -> float
+| `-Param float 'X'
+`-FunctionDecl 'unary' -> float
+  |-Param int 'n'
+  |-Param float 'm'
+  `-Block
+    |-VarDecl float 'result'
+    |-VarDecl float 'sum'
+    |-Assign
+    | |-VarRef 'sum'
+    | `-FloatLiteral 0.0
+    |-Assign
+    | |-VarRef 'result'
+    | `-BinaryOp '+'
+    |   |-VarRef 'n'
+    |   `-VarRef 'm'
+    |-Call 'print_float'
+    | `-VarRef 'result'
+    |-Assign
+    | |-VarRef 'sum'
+    | `-BinaryOp '+'
+    |   |-VarRef 'sum'
+    |   `-VarRef 'result'
+    |-Assign
+    | |-VarRef 'result'
+    | `-BinaryOp '+'
+    |   |-VarRef 'n'
+    |   `-UnaryOp '-'
+    |     `-VarRef 'm'
+    |-Call 'print_float'
+    | `-VarRef 'result'
+    |-Assign
+    | |-VarRef 'sum'
+    | `-BinaryOp '+'
+    |   |-VarRef 'sum'
+    |   `-VarRef 'result'
+    |-Assign
+    | |-VarRef 'result'
+    | `-BinaryOp '+'
+    |   |-VarRef 'n'
+    |   `-UnaryOp '-'
+    |     `-UnaryOp '-'
+    |       `-VarRef 'm'
+    |-Call 'print_float'
+    | `-VarRef 'result'
+    |-Assign
+    | |-VarRef 'sum'
+    | `-BinaryOp '+'
+    |   |-VarRef 'sum'
+    |   `-VarRef 'result'
+    |-Assign
+    | |-VarRef 'result'
+    | `-BinaryOp '+'
+    |   |-UnaryOp '-'
+    |   | `-VarRef 'n'
+    |   `-UnaryOp '-'
+    |     `-VarRef 'm'
+    |-Call 'print_float'
+    | `-VarRef 'result'
+    |-Assign
+    | |-VarRef 'sum'
+    | `-BinaryOp '+'
+    |   |-VarRef 'sum'
+    |   `-VarRef 'result'
+    `-Return
+      `-VarRef 'sum'
+********************* AST (end) ***********************
+found param in param_list_prime: m
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+5.000000
+-1.000000
+5.000000
+-5.000000
+
+./unary
+Result: PASSED
+Result: PASSED
+
+Test: recurse
+Parsed parameter list for external function
+Parsed a top-level external function declaration -- 1
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed an if statment
+Parsed an expression statement
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsed parameter list for function
+Parsed a set of local variable declaration
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+|-ExternDecl 'print_int' -> int
+| `-Param int 'X'
+|-FunctionDecl 'addNumbers' -> int
+| |-Param int 'n'
+| `-Block
+|   |-VarDecl int 'result'
+|   |-Assign
+|   | |-VarRef 'result'
+|   | `-IntLiteral 0
+|   |-If
+|   | |-Condition
+|   | | `-BinaryOp '!='
+|   | |   |-VarRef 'n'
+|   | |   `-IntLiteral 0
+|   | |-Then
+|   | | `-Block
+|   | |   `-Assign
+|   | |     |-VarRef 'result'
+|   | |     `-BinaryOp '+'
+|   | |       |-VarRef 'n'
+|   | |       `-Call 'addNumbers'
+|   | |         `-BinaryOp '-'
+|   | |           |-VarRef 'n'
+|   | |           `-IntLiteral 1
+|   | `-Else
+|   |   `-Block
+|   |     `-Assign
+|   |       |-VarRef 'result'
+|   |       `-VarRef 'n'
+|   |-Call 'print_int'
+|   | `-VarRef 'result'
+|   `-Return
+|     `-VarRef 'result'
+`-FunctionDecl 'recursion_driver' -> int
+  |-Param int 'num'
+  `-Block
+    `-Return
+      `-Call 'addNumbers'
+        `-VarRef 'num'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+0
+1
+3
+6
+10
+15
+21
+28
+36
+45
+55
+66
+78
+91
+105
+120
+136
+153
+171
+190
+210
+
+./recurse
+PASSED Result: 210
+PASSED Result: 210
+
+Test: rfact
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed an if statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsed parameter list for function
+Parsed a set of local variable declaration
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+|-FunctionDecl 'multiplyNumbers' -> int
+| |-Param int 'n'
+| `-Block
+|   |-VarDecl int 'result'
+|   |-Assign
+|   | |-VarRef 'result'
+|   | `-IntLiteral 0
+|   |-If
+|   | |-Condition
+|   | | `-BinaryOp '>='
+|   | |   |-VarRef 'n'
+|   | |   `-IntLiteral 1
+|   | |-Then
+|   | | `-Block
+|   | |   `-Assign
+|   | |     |-VarRef 'result'
+|   | |     `-BinaryOp '*'
+|   | |       |-VarRef 'n'
+|   | |       `-Call 'multiplyNumbers'
+|   | |         `-BinaryOp '-'
+|   | |           |-VarRef 'n'
+|   | |           `-IntLiteral 1
+|   | `-Else
+|   |   `-Block
+|   |     `-Assign
+|   |       |-VarRef 'result'
+|   |       `-IntLiteral 1
+|   `-Return
+|     `-VarRef 'result'
+`-FunctionDecl 'rfact' -> int
+  |-Param int 'n'
+  `-Block
+    `-Return
+      `-Call 'multiplyNumbers'
+        `-VarRef 'n'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+
+./rfact
+PASSED Result: 3628800
+PASSED Result: 3628800
+
+Test: palindrome
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a list of statements
+Parsed an if statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+`-FunctionDecl 'palindrome' -> bool
+  |-Param int 'number'
+  `-Block
+    |-VarDecl int 't'
+    |-VarDecl int 'rev'
+    |-VarDecl int 'rmndr'
+    |-VarDecl bool 'result'
+    |-Assign
+    | |-VarRef 'rev'
+    | `-IntLiteral 0
+    |-Assign
+    | |-VarRef 'result'
+    | `-BoolLiteral false
+    |-Assign
+    | |-VarRef 't'
+    | `-VarRef 'number'
+    |-While
+    | |-Condition
+    | | `-BinaryOp '>'
+    | |   |-VarRef 'number'
+    | |   `-IntLiteral 0
+    | `-Body
+    |   `-Block
+    |     |-Assign
+    |     | |-VarRef 'rmndr'
+    |     | `-BinaryOp '%'
+    |     |   |-VarRef 'number'
+    |     |   `-IntLiteral 10
+    |     |-Assign
+    |     | |-VarRef 'rev'
+    |     | `-BinaryOp '+'
+    |     |   |-BinaryOp '*'
+    |     |   | |-VarRef 'rev'
+    |     |   | `-IntLiteral 10
+    |     |   `-VarRef 'rmndr'
+    |     `-Assign
+    |       |-VarRef 'number'
+    |       `-BinaryOp '/'
+    |         |-VarRef 'number'
+    |         `-IntLiteral 10
+    |-If
+    | |-Condition
+    | | `-BinaryOp '=='
+    | |   |-VarRef 't'
+    | |   `-VarRef 'rev'
+    | |-Then
+    | | `-Block
+    | |   `-Assign
+    | |     |-VarRef 'result'
+    | |     `-BoolLiteral true
+    | `-Else
+    |   `-Block
+    |     `-Assign
+    |       |-VarRef 'result'
+    |       `-BoolLiteral false
+    `-Return
+      `-VarRef 'result'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+
+./palindrome
+PASSED Result: 
+PASSED Result: 
+
+Test: array_addition
+Parsed parameter list for function
+3:17 Syntax error: Expected ';' to end local variable declaration
 found param in param_list_prime: m

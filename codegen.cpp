@@ -6,8 +6,11 @@
 //   Step 2  literals, functions, blocks, return and the program root
 //   Step 3  local variables, reading a variable, assignment
 //   Step 4  unary and binary operators, with implicit widening
-// Later steps (calls, if/while, && and ||, globals)
-// add their codegen() bodies to the end of this file.
+//   Step 5  function calls
+//   Step 6  if and while
+//   Step 7  short-circuit && and ||
+//   Step 8  global variables
+// Each step's functions are in their own section, in this order.
 //
 // Two rules hold everywhere. First, every MiniC variable lives in memory (an
 // alloca on the stack, or a global), and is read with load and written with
@@ -493,8 +496,9 @@ Value *AssignAST::codegen() {
 // Step 4 - unary and binary operators
 //
 // After this step expressions such as "a / 2 + 0.5" or "(f == 3.5) + 1"
-// compile, with the operands converted to a common type first. && and || are
-// left for Step 7, because they need branches rather than one instruction.
+// compile, with the operands converted to a common type first. && and || go
+// through the same node but are handed to Step 7, because they need branches
+// rather than one instruction.
 //===----------------------------------------------------------------------===//
 
 // Step 4. Unary operators "!x" and "-x". The operand is generated first and
@@ -539,7 +543,13 @@ Value *UnaryExprAST::codegen() {
 // remainder and the ordering comparisons use the signed forms (sdiv, srem,
 // icmp slt). There is no float remainder in MiniC, so % on a float is a type
 // error. Every comparison produces an i1, which is a MiniC bool.
+//
+// && and || are checked before anything is generated, because for them the
+// right operand must not be evaluated unconditionally (see Step 7).
 Value *ExprAST::codegen() {
+  if (Op == AND || Op == OR)
+    return codegenLogical();
+
   Value *L = requireValue(Node1->codegen(), Tok,
                           "the left operand of '" + Tok.lexeme + "'");
   Value *R = requireValue(Node2->codegen(), Tok,
@@ -605,7 +615,248 @@ Value *ExprAST::codegen() {
       return Builder.CreateICmpNE(L, R, "netmp");
     }
   }
-  // Only && and || reach this point, until Step 7 handles them.
+  // The parser only builds ExprAST nodes for the operators above, so this is
+  // never reached; it is here so every path returns a value.
   return SemanticError(Tok, "type",
-                       "operator '" + Tok.lexeme + "' is not supported yet");
+                       "unknown binary operator '" + Tok.lexeme + "'");
+}
+
+//===----------------------------------------------------------------------===//
+// Step 5 - function calls
+//
+// After this step a MiniC function can call another MiniC function or an
+// extern such as print_int, which is what almost every test program does.
+//===----------------------------------------------------------------------===//
+
+// Step 5. A call "f(a, b)". The variables are checked first: if a variable
+// called f is in scope, it hides any function f, just as an inner variable
+// hides an outer one, so "f(...)" is calling a variable and is an error.
+// Otherwise the callee is looked up in the module, which holds every
+// function declared so far, both externs and definitions. As
+// ProgramAST::codegen goes in source order, a function must be declared
+// before it is called, the same rule as in C.
+//
+// The checks then follow the signature: the number of arguments must match
+// exactly (an arity error otherwise), and each argument must have a value
+// and is widened to its parameter's type, so passing an int to a float
+// parameter is fine and passing a float to an int parameter is a narrowing
+// error. The error names which argument was wrong, counting from 1.
+//
+// A call to a void function produces no value, and LLVM does not allow a
+// name on an instruction with no value: the verifier rejects it with
+// "Instruction has a name, but provides a void value!". So only calls that
+// return something get the name "calltmp". The void call's result is still
+// returned, and requireValue reports it if the caller tries to use it, as in
+// "x = f();".
+Value *ArgsAST::codegen() {
+  if (lookupVariable(Callee).Ptr)
+    return SemanticError(Tok, "type",
+                         "'" + Callee + "' is a variable, not a function");
+  Function *CalleeF = TheModule->getFunction(Callee);
+  if (!CalleeF)
+    return SemanticError(Tok, "undeclared name",
+                         "call to undeclared function '" + Callee + "'");
+
+  if (CalleeF->arg_size() != ArgsList.size())
+    return SemanticError(Tok, "arity",
+                         "function '" + Callee + "' expects " +
+                             std::to_string(CalleeF->arg_size()) +
+                             " argument(s) but was called with " +
+                             std::to_string(ArgsList.size()));
+
+  std::vector<Value *> ArgVals;
+  for (unsigned i = 0; i < ArgsList.size(); i++) {
+    std::string which = "argument " + std::to_string(i + 1) + " of call to '" +
+                        Callee + "'";
+    Value *V = requireValue(ArgsList[i]->codegen(), Tok, which);
+    llvm::Type *ParamTy = CalleeF->getArg(i)->getType();
+    Value *Widened = widen(V, ParamTy);
+    if (!Widened)
+      return SemanticError(Tok, "type",
+                           "cannot pass " + typeName(V->getType()) + " as " +
+                               which + ", which expects " + typeName(ParamTy) +
+                               " (narrowing conversion)");
+    ArgVals.push_back(Widened);
+  }
+
+  if (CalleeF->getReturnType()->isVoidTy())
+    return Builder.CreateCall(CalleeF, ArgVals);
+  return Builder.CreateCall(CalleeF, ArgVals, "calltmp");
+}
+
+//===----------------------------------------------------------------------===//
+// Step 6 - if and while
+//
+// This is the first step where one statement produces several basic blocks.
+// The pattern is always the same: create the blocks, emit a branch to them,
+// then move the Builder into each block in turn and generate its code.
+// Every block must end with exactly one terminator (br or ret), and after
+// the statement the Builder is left in the block where execution continues.
+//===----------------------------------------------------------------------===//
+
+// Step 6. "if (c) { ... } else { ... }". The condition is generated in the
+// current block and, as in C, may be an int or a float as well as a bool, so
+// toBool (Step 1) turns it into the i1 that a conditional branch needs.
+//
+// We then make an if.then block, an if.end block where both paths meet, and
+// an if.else block only when there is an else part. Without one, the false
+// edge of the branch goes straight to if.end. Each branch body ends with a
+// jump to if.end. Only if.then is put into the function straight away; the
+// other blocks are added after the then part has been generated, so the
+// blocks appear in the output in the same order as the source code.
+//
+// If the then part ends with a return, we are already sitting in the dead
+// "after.ret" block from Step 2, so the jump to if.end lands there and is
+// removed with it. An if with a return on both sides still gets an if.end,
+// which nothing reaches; the implicit return at the end of the function
+// (Step 2) closes it, and EliminateUnreachableBlocks then deletes it.
+Value *IfExprAST::codegen() {
+  Value *CondV =
+      toBool(requireValue(Cond->codegen(), Tok, "the condition of 'if'"));
+
+  Function *F = Builder.GetInsertBlock()->getParent();
+  BasicBlock *ThenBB = BasicBlock::Create(TheContext, "if.then", F);
+  BasicBlock *EndBB = BasicBlock::Create(TheContext, "if.end");
+  BasicBlock *ElseBB = EndBB;
+  if (Else)
+    ElseBB = BasicBlock::Create(TheContext, "if.else");
+
+  Builder.CreateCondBr(CondV, ThenBB, ElseBB);
+
+  Builder.SetInsertPoint(ThenBB);
+  Then->codegen();
+  Builder.CreateBr(EndBB);
+
+  if (Else) {
+    F->insert(F->end(), ElseBB);
+    Builder.SetInsertPoint(ElseBB);
+    Else->codegen();
+    Builder.CreateBr(EndBB);
+  }
+
+  F->insert(F->end(), EndBB);
+  Builder.SetInsertPoint(EndBB);
+  return nullptr;
+}
+
+// Step 6. "while (c) stmt". The condition has to be tested again before
+// every iteration, so it gets its own block, while.cond, which the code
+// before the loop jumps into and the end of the body jumps back to. That
+// back edge is what makes it a loop. while.cond then branches either into
+// while.body or out to while.end, where the code after the loop continues.
+//
+// The body may be null for "while (c) ;" (the Step 0 parser fix keeps such
+// loops), in which case while.body contains only the jump back. Because
+// every variable lives in memory, the condition reloads its variables on
+// each test and sees what the body stored, so no phi nodes are needed here.
+Value *WhileExprAST::codegen() {
+  Function *F = Builder.GetInsertBlock()->getParent();
+  BasicBlock *CondBB = BasicBlock::Create(TheContext, "while.cond", F);
+  BasicBlock *BodyBB = BasicBlock::Create(TheContext, "while.body");
+  BasicBlock *EndBB = BasicBlock::Create(TheContext, "while.end");
+
+  Builder.CreateBr(CondBB);
+
+  Builder.SetInsertPoint(CondBB);
+  Value *CondV =
+      toBool(requireValue(Cond->codegen(), Tok, "the condition of 'while'"));
+  Builder.CreateCondBr(CondV, BodyBB, EndBB);
+
+  F->insert(F->end(), BodyBB);
+  Builder.SetInsertPoint(BodyBB);
+  if (Body)
+    Body->codegen();
+  Builder.CreateBr(CondBB);
+
+  F->insert(F->end(), EndBB);
+  Builder.SetInsertPoint(EndBB);
+  return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// Step 7 - short-circuit && and ||
+//===----------------------------------------------------------------------===//
+
+// Step 7. "a && b" and "a || b". MiniC follows C here: the right operand is
+// only evaluated when the left one has not already decided the answer. For
+// && that means b runs only if a is true, and for || only if a is false.
+// This matters when b has side effects, for example "x != 0 && f(x)" must
+// not call f when x is 0. So unlike the other operators these cannot be a
+// single instruction; they need control flow.
+//
+// The left operand is turned into an i1 with toBool and we branch on it. One
+// edge goes to logic.rhs, where b is evaluated, and the other jumps straight
+// to logic.end, because the answer is already known: true for ||, false for
+// &&. Both paths meet in logic.end.
+//
+// At logic.end the result depends on which way we came in, and SSA does not
+// let us assign a register twice. A phi node is the SSA way to say "this
+// value is X if we arrived from block A and Y if we arrived from block B".
+// It is the only place in the compiler where we build one directly. The
+// incoming block for b is taken after b has been generated, not as
+// logic.rhs, because b may itself contain && or || and finish in a later
+// block of its own.
+//
+// The result is always a bool, whatever the operand types were.
+Value *ExprAST::codegenLogical() {
+  Value *L = toBool(requireValue(Node1->codegen(), Tok,
+                                 "the left operand of '" + Tok.lexeme + "'"));
+
+  Function *F = Builder.GetInsertBlock()->getParent();
+  BasicBlock *LhsEndBB = Builder.GetInsertBlock();
+  BasicBlock *RhsBB = BasicBlock::Create(TheContext, "logic.rhs", F);
+  BasicBlock *EndBB = BasicBlock::Create(TheContext, "logic.end");
+
+  if (Op == OR)
+    Builder.CreateCondBr(L, EndBB, RhsBB);
+  else
+    Builder.CreateCondBr(L, RhsBB, EndBB);
+
+  Builder.SetInsertPoint(RhsBB);
+  Value *R = toBool(requireValue(Node2->codegen(), Tok,
+                                 "the right operand of '" + Tok.lexeme + "'"));
+  BasicBlock *RhsEndBB = Builder.GetInsertBlock();
+  Builder.CreateBr(EndBB);
+
+  F->insert(F->end(), EndBB);
+  Builder.SetInsertPoint(EndBB);
+  PHINode *Result = Builder.CreatePHI(BoolTy(), 2, "logictmp");
+  Result->addIncoming(ConstantInt::get(BoolTy(), Op == OR), LhsEndBB);
+  Result->addIncoming(R, RhsEndBB);
+  return Result;
+}
+
+//===----------------------------------------------------------------------===//
+// Step 8 - global variables
+//===----------------------------------------------------------------------===//
+
+// Step 8. A top-level declaration "int g;" creates a GlobalVariable in the
+// module. Locals live in allocas inside a function, but a global exists for
+// the whole run of the program, so it belongs to the module itself. Because
+// lookupVariable (Step 1) already returns a pointer for both kinds, reading
+// and assigning a global uses exactly the same load and store code as a
+// local, and a local with the same name simply shadows it.
+//
+// MiniC lets a global be defined only once (unlike C, where "int g; int g;"
+// is allowed), and a global cannot share its name with a function.
+//
+// Like C, an uninitialised global starts at zero, so it gets a zero
+// initialiser of its type. It uses common linkage, which is how C compilers
+// emit an uninitialised global; LLVM requires a common global to have a zero
+// initialiser, and the verifier rejects one without any initialiser at all.
+// A test driver that declares the same global as "extern" can also see it.
+Value *GlobVarDeclAST::codegen() {
+  const std::string &Name = Var->getName();
+  if (GlobalNamedValues.count(Name) > 0)
+    return SemanticError(Var->getTok(), "scope",
+                         "redefinition of global variable '" + Name + "'");
+  if (TheModule->getFunction(Name))
+    return SemanticError(Var->getTok(), "scope",
+                         "'" + Name + "' is already declared as a function");
+
+  llvm::Type *Ty = typeFromName(Type);
+  auto *G = new GlobalVariable(*TheModule, Ty, false, GlobalValue::CommonLinkage,
+                               Constant::getNullValue(Ty), Name);
+  GlobalNamedValues[Name] = G;
+  return G;
 }

@@ -114,6 +114,7 @@ public:
   // Step 0: declarations and assignments reuse this token to report errors
   // such as "undeclared variable" at the variable's own position.
   const TOKEN &getTok() const { return Tok; }
+  llvm::Value *codegen() override; // Step 3: read the variable
   std::string to_string() const override { return "VarRef '" + Name + "'"; }
 };
 
@@ -147,6 +148,7 @@ public:
       : Var(std::move(var)), Type(type) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
+  llvm::Value *codegen() override; // Step 3: declare a local
   std::string to_string() const override {
     return "VarDecl " + Type + " '" + Var->getName() + "'";
   }
@@ -220,6 +222,7 @@ public:
           std::unique_ptr<ASTnode> node2)
       : Node1(std::move(node1)), Tok(opTok), Op(opTok.type),
         Node2(std::move(node2)) {}
+  llvm::Value *codegen() override; // Step 4: arithmetic and comparisons
   std::string to_string() const override {
     return treeNode("BinaryOp '" + opToString(Op) + "'",
                     {nodeToString(Node1.get()), nodeToString(Node2.get())});
@@ -236,6 +239,7 @@ class UnaryExprAST : public ASTnode {
 public:
   UnaryExprAST(TOKEN opTok, std::unique_ptr<ASTnode> operand)
       : Tok(opTok), Op(opTok.type), Operand(std::move(operand)) {}
+  llvm::Value *codegen() override; // Step 4: -x and !x
   std::string to_string() const override {
     return treeNode("UnaryOp '" + opToString(Op) + "'",
                     {nodeToString(Operand.get())});
@@ -252,6 +256,7 @@ class AssignAST : public ASTnode {
 public:
   AssignAST(std::unique_ptr<VariableASTnode> var, std::unique_ptr<ASTnode> val)
       : Var(std::move(var)), Val(std::move(val)) {}
+  llvm::Value *codegen() override; // Step 3: store into the variable
   std::string to_string() const override {
     return treeNode("Assign", {nodeToString(Var.get()), nodeToString(Val.get())});
   }

@@ -4,7 +4,9 @@
 // program compile:
 //   Step 1  shared helpers: types, widening, truth values, symbol tables
 //   Step 2  literals, functions, blocks, return and the program root
-// Later steps (variables, operators, calls, if/while, && and ||, globals)
+//   Step 3  local variables, reading a variable, assignment
+//   Step 4  unary and binary operators, with implicit widening
+// Later steps (calls, if/while, && and ||, globals)
 // add their codegen() bodies to the end of this file.
 //
 // Two rules hold everywhere. First, every MiniC variable lives in memory (an
@@ -416,4 +418,194 @@ Value *ProgramAST::codegen() {
   for (const auto &Decl : Decls)
     Decl->codegen();
   return nullptr;
+}
+
+//===----------------------------------------------------------------------===//
+// Step 3 - local variables, reading a variable, and assignment
+//
+// After this step a function can declare locals, assign to them and read
+// them back, including shadowed names in nested blocks.
+//===----------------------------------------------------------------------===//
+
+// Step 3. A local declaration such as "int x;" produces no instruction where
+// it appears. All the work is in declareLocal from Step 1: it reserves the
+// stack slot in the entry block and records the name in the innermost scope,
+// and complains if the same block already declared x. MiniC has no
+// initialisers, so nothing is stored yet, and a declaration is not an
+// expression, so there is no value to return.
+Value *VarDeclAST::codegen() {
+  declareLocal(Var->getTok(), Var->getName(), typeFromName(Type));
+  return nullptr;
+}
+
+// Step 3. Using a variable as a value, like the x in "y = x + 1". The name
+// is looked up through the scopes (innermost first, then the globals), and
+// its current value is loaded from the address we get back. Remember that
+// variables live in memory, so reading one is always a load and never just a
+// register. The load needs the stored type spelled out, because LLVM pointers
+// are untyped, and lookupVariable keeps that type next to the pointer.
+//
+// If the name is not found, it may still be a function name used without
+// brackets ("x = f;"), which deserves a clearer message than "undeclared".
+Value *VariableASTnode::codegen() {
+  VarInfo Var = lookupVariable(Name);
+  if (!Var.Ptr) {
+    if (TheModule->getFunction(Name))
+      return SemanticError(Tok, "type",
+                           "'" + Name + "' is a function, not a variable");
+    return SemanticError(Tok, "undeclared name",
+                         "use of undeclared variable '" + Name + "'");
+  }
+  return Builder.CreateLoad(Var.Ty, Var.Ptr, Name);
+}
+
+// Step 3. Assignment "x = e". The target is looked up first so that
+// assigning to an undeclared name is reported before we generate anything
+// for the right-hand side. Then e is generated, and it must have a value
+// (a void call cannot be assigned). The value is widened to the variable's
+// type, so "float f; f = 1;" stores 1.0, while narrowing such as storing a
+// float into an int is rejected, as MiniC only allows widening.
+//
+// In C an assignment is itself an expression whose value is what was
+// stored. Returning that value is what makes "a = b = 3" work: the inner
+// assignment hands 3 to the outer one.
+Value *AssignAST::codegen() {
+  const std::string &Name = Var->getName();
+  VarInfo Target = lookupVariable(Name);
+  if (!Target.Ptr)
+    return SemanticError(Var->getTok(), "undeclared name",
+                         "assignment to undeclared variable '" + Name + "'");
+
+  Value *RHS = requireValue(Val->codegen(), Var->getTok(),
+                            "the right-hand side of the assignment to '" +
+                                Name + "'");
+  Value *Widened = widen(RHS, Target.Ty);
+  if (!Widened)
+    return SemanticError(Var->getTok(), "type",
+                         "cannot assign " + typeName(RHS->getType()) + " to " +
+                             typeName(Target.Ty) + " variable '" + Name +
+                             "' (narrowing conversion)");
+  Builder.CreateStore(Widened, Target.Ptr);
+  return Widened;
+}
+
+//===----------------------------------------------------------------------===//
+// Step 4 - unary and binary operators
+//
+// After this step expressions such as "a / 2 + 0.5" or "(f == 3.5) + 1"
+// compile, with the operands converted to a common type first. && and || are
+// left for Step 7, because they need branches rather than one instruction.
+//===----------------------------------------------------------------------===//
+
+// Step 4. Unary operators "!x" and "-x". The operand is generated first and
+// must have a value.
+//
+// "!" works on truth values, so the operand goes through toBool (Step 1),
+// which turns an int or float into an i1 by comparing it with zero, and the
+// i1 is then flipped. The result of ! is therefore always a bool, as in
+// "!5" giving false.
+//
+// "-" needs a number. As in C, a bool is first promoted to int, so -true is
+// -1. LLVM has separate instructions for integers and floats: fneg for a
+// float, and neg (really "0 - x") for an int.
+Value *UnaryExprAST::codegen() {
+  Value *V = requireValue(Operand->codegen(), Tok,
+                          "the operand of '" + Tok.lexeme + "'");
+  if (Op == NOT)
+    return Builder.CreateNot(toBool(V), "nottmp");
+
+  if (V->getType()->isIntegerTy(1))
+    V = widen(V, IntTy());
+  if (V->getType()->isFloatTy())
+    return Builder.CreateFNeg(V, "negtmp");
+  return Builder.CreateNeg(V, "negtmp");
+}
+
+// Step 4. Binary arithmetic and comparisons. The AST is walked in post-order:
+// both operands are generated first, and then one instruction combines them.
+//
+// LLVM instructions need both operands to have the same type, but MiniC lets
+// you write "a / 2 + 0.5" with an int on one side and a float on the other.
+// So before choosing the instruction we pick a common type: the wider of the
+// two in the order bool < int < float, and never narrower than int, because
+// C does arithmetic and comparisons on bools as ints (true + true is 2).
+// Both operands are then widened to that type, which never fails since we
+// only ever go upwards.
+//
+// The common type then decides the instruction family. Floats use the F
+// versions (fadd, fcmp). The float comparisons are "ordered", so any
+// comparison with NaN is false, except != which is "unordered" so that
+// NaN != NaN is true, matching C. Ints are signed in MiniC, so division,
+// remainder and the ordering comparisons use the signed forms (sdiv, srem,
+// icmp slt). There is no float remainder in MiniC, so % on a float is a type
+// error. Every comparison produces an i1, which is a MiniC bool.
+Value *ExprAST::codegen() {
+  Value *L = requireValue(Node1->codegen(), Tok,
+                          "the left operand of '" + Tok.lexeme + "'");
+  Value *R = requireValue(Node2->codegen(), Tok,
+                          "the right operand of '" + Tok.lexeme + "'");
+
+  llvm::Type *Ty = L->getType();
+  if (typeRank(R->getType()) > typeRank(Ty))
+    Ty = R->getType();
+  if (Ty->isIntegerTy(1))
+    Ty = IntTy();
+  L = widen(L, Ty);
+  R = widen(R, Ty);
+
+  if (Ty->isFloatTy()) {
+    switch (Op) {
+    case PLUS:
+      return Builder.CreateFAdd(L, R, "addtmp");
+    case MINUS:
+      return Builder.CreateFSub(L, R, "subtmp");
+    case ASTERIX:
+      return Builder.CreateFMul(L, R, "multmp");
+    case DIV:
+      return Builder.CreateFDiv(L, R, "divtmp");
+    case MOD:
+      return SemanticError(Tok, "type",
+                           "operands of '%' must be int or bool, not float");
+    case LT:
+      return Builder.CreateFCmpOLT(L, R, "lttmp");
+    case LE:
+      return Builder.CreateFCmpOLE(L, R, "letmp");
+    case GT:
+      return Builder.CreateFCmpOGT(L, R, "gttmp");
+    case GE:
+      return Builder.CreateFCmpOGE(L, R, "getmp");
+    case EQ:
+      return Builder.CreateFCmpOEQ(L, R, "eqtmp");
+    case NE:
+      return Builder.CreateFCmpUNE(L, R, "netmp");
+    }
+  } else {
+    switch (Op) {
+    case PLUS:
+      return Builder.CreateAdd(L, R, "addtmp");
+    case MINUS:
+      return Builder.CreateSub(L, R, "subtmp");
+    case ASTERIX:
+      return Builder.CreateMul(L, R, "multmp");
+    case DIV:
+      return Builder.CreateSDiv(L, R, "divtmp");
+    case MOD:
+      return Builder.CreateSRem(L, R, "modtmp");
+    case LT:
+      return Builder.CreateICmpSLT(L, R, "lttmp");
+    case LE:
+      return Builder.CreateICmpSLE(L, R, "letmp");
+    case GT:
+      return Builder.CreateICmpSGT(L, R, "gttmp");
+    case GE:
+      return Builder.CreateICmpSGE(L, R, "getmp");
+    case EQ:
+      return Builder.CreateICmpEQ(L, R, "eqtmp");
+    case NE:
+      return Builder.CreateICmpNE(L, R, "netmp");
+    }
+  }
+  // Only && and || reach this point, until Step 7 handles them.
+  return SemanticError(Tok, "type",
+                       "operator '" + Tok.lexeme + "' is not supported yet");
 }

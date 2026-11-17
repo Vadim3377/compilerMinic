@@ -16,3 +16,6 @@ tests/rfact/rfact
 tests/unary/unary
 tests/void/void
 tests/while/while
+*.o
+mccomp
+output.ll

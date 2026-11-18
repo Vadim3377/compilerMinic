@@ -11,6 +11,7 @@
 //   Step 7  short-circuit && and ||
 //   Step 8  global variables
 //   Steps 11 and 12  arrays: declarations, reading and writing elements
+//   Step 13  arrays as function parameters and arguments
 // Each step's functions are in their own section, in this order. All array
 // code is in one section at the end of the file; where an array step changed
 // an earlier function, that function's comment says so.
@@ -231,13 +232,27 @@ static AllocaInst *declareLocal(const TOKEN &tok, const std::string &name,
 // Part 3. Array helpers used by functions from earlier steps. They are only
 // declared here; their code is in the arrays section at the end of the file,
 // so that everything about arrays stays together.
+static int arrayRank(Type *T);
+static std::string arrayTypeName(Type *T);
 static Type *arrayTypeFor(const TOKEN &tok, const std::string &name,
                           const std::string &elemName,
-                          const std::vector<int> &dims);
+                          const std::vector<int> &dims,
+                          bool allowUnsizedFirst);
 static bool isArrayVar(const VarInfo &V);
 static void declareLocalArray(const TOKEN &tok, const std::string &name,
                               const std::string &elemName,
                               const std::vector<int> &dims);
+
+// Step 13. An array parameter arrives as a pointer, so its stack slot holds a
+// "ptr" and the slot's type no longer says what shape the array has. The
+// declared array type of every such slot is remembered here, keyed by the
+// slot. Local and global arrays need no entry: their own type, such as
+// [3 x [4 x i32]], already carries the shape.
+static std::map<Value *, Type *> ArrayParamTypes;
+
+// Step 13. The same information per function: for each parameter, its array
+// type, or nullptr for a scalar. A call uses it to check array arguments.
+static std::map<Function *, std::vector<Type *>> FunctionArrayParams;
 
 //===----------------------------------------------------------------------===//
 // Step 2 - literals, functions, blocks, return and the program
@@ -271,10 +286,26 @@ Value *BoolASTnode::codegen() { return ConstantInt::get(BoolTy(), Bool); }
 // passed in a full register, so bool parameters and bool returns are marked
 // zeroext. That tells the C++ side on the other end of the call that the
 // upper bits are zero, which is what it expects.
+//
+// Step 13. An array parameter such as "int a[10]" is passed the C way, as a
+// pointer to its first element, so its LLVM parameter type is "ptr". The
+// shape the pointer has lost ([10 x i32]) is kept in FunctionArrayParams, so
+// the function body and every call can still check and index it. The first
+// size may be left out ("int a[]"), because a callee never needs it.
 Function *FunctionPrototypeAST::codegen() {
   std::vector<llvm::Type *> ParamTys;
-  for (const auto &Param : Params)
-    ParamTys.push_back(typeFromName(Param->getType()));
+  std::vector<llvm::Type *> ArrayParams;
+  for (const auto &Param : Params) {
+    if (Param->getDims().empty()) {
+      ParamTys.push_back(typeFromName(Param->getType()));
+      ArrayParams.push_back(nullptr);
+    } else {
+      ArrayParams.push_back(arrayTypeFor(Tok, Param->getName(),
+                                         Param->getType(), Param->getDims(),
+                                         true));
+      ParamTys.push_back(PointerType::get(TheContext, 0));
+    }
+  }
   llvm::Type *RetTy = typeFromName(Type);
   FunctionType *FT = FunctionType::get(RetTy, ParamTys, false);
 
@@ -290,6 +321,7 @@ Function *FunctionPrototypeAST::codegen() {
 
   Function *F =
       Function::Create(FT, Function::ExternalLinkage, Name, TheModule.get());
+  FunctionArrayParams[F] = ArrayParams;
 
   if (RetTy->isIntegerTy(1))
     F->addRetAttr(Attribute::ZExt);
@@ -314,6 +346,10 @@ Function *FunctionPrototypeAST::codegen() {
 // level declarations share that one scope, which is why the body is
 // generated with codegenInScope() instead of codegen(): "int f(int x)
 // { int x; }" is then correctly reported as a redeclaration.
+//
+// Step 13. An array parameter is stored in its slot like any other (the slot
+// holds the pointer), and the slot is entered in ArrayParamTypes so that
+// indexing it inside the body knows the array's shape.
 //
 // Every basic block must end in a terminator, and the body might not end
 // with a return (a void function often does not). So a return is always
@@ -341,6 +377,9 @@ Value *FunctionDeclAST::codegen() {
     Arg.setName(ParamName);
     AllocaInst *Slot = declareLocal(Proto->getTok(), ParamName, Arg.getType());
     Builder.CreateStore(&Arg, Slot);
+    Type *ArrTy = FunctionArrayParams[F][Idx];
+    if (ArrTy)
+      ArrayParamTypes[Slot] = ArrTy;
     Idx++;
   }
 
@@ -474,7 +513,8 @@ Value *VarDeclAST::codegen() {
 //
 // Step 12. A whole array is not a value in MiniC: "x = a;" or "a + 1" must
 // index it first, so a plain name that turns out to be an array is an
-// "invalid array use" error.
+// "invalid array use" error. Passing a whole array to a function does not
+// come through here; calls use codegenArrayRef (Step 13).
 Value *VariableASTnode::codegen() {
   VarInfo Var = lookupVariable(Name);
   if (!Var.Ptr) {
@@ -693,6 +733,15 @@ Value *ExprAST::codegen() {
 // parameter is fine and passing a float to an int parameter is a narrowing
 // error. The error names which argument was wrong, counting from 1.
 //
+// Step 13. A parameter declared as an array needs an array argument of the
+// same shape. The argument is asked for an array address (codegenArrayRef):
+// a whole array "a", or a row such as "m[i]" of a 2D array. Its type must
+// match the parameter in everything except the first size, which a callee
+// never needs. So int[5] may be passed to "int a[10]" or "int a[]", as in C,
+// but not to "float a[10]" or to a 2D parameter. The address is passed as it
+// is, which is C's pass by reference: the callee's writes change the
+// caller's array.
+//
 // A call to a void function produces no value, and LLVM does not allow a
 // name on an instruction with no value: the verifier rejects it with
 // "Instruction has a name, but provides a void value!". So only calls that
@@ -719,6 +768,30 @@ Value *ArgsAST::codegen() {
   for (unsigned i = 0; i < ArgsList.size(); i++) {
     std::string which = "argument " + std::to_string(i + 1) + " of call to '" +
                         Callee + "'";
+
+    Type *ParamArrTy = nullptr;
+    auto Known = FunctionArrayParams.find(CalleeF);
+    if (Known != FunctionArrayParams.end())
+      ParamArrTy = Known->second[i];
+    if (ParamArrTy) {
+      Type *ArgArrTy = nullptr;
+      Value *Ref = ArgsList[i]->codegenArrayRef(&ArgArrTy);
+      if (!Ref)
+        return SemanticError(Tok, "invalid array use",
+                             which + " must be an array of type " +
+                                 arrayTypeName(ParamArrTy));
+      bool sameShape = arrayRank(ArgArrTy) == arrayRank(ParamArrTy) &&
+                       ArgArrTy->getArrayElementType() ==
+                           ParamArrTy->getArrayElementType();
+      if (!sameShape)
+        return SemanticError(Tok, "invalid array use",
+                             "cannot pass " + arrayTypeName(ArgArrTy) +
+                                 " as " + which + ", which expects " +
+                                 arrayTypeName(ParamArrTy));
+      ArgVals.push_back(Ref);
+      continue;
+    }
+
     Value *V = requireValue(ArgsList[i]->codegen(), Tok, which);
     llvm::Type *ParamTy = CalleeF->getArg(i)->getType();
     Value *Widened = widen(V, ParamTy);
@@ -911,7 +984,7 @@ Value *GlobVarDeclAST::codegen() {
 
   llvm::Type *Ty = typeFromName(Type);
   if (!Dims.empty())
-    Ty = arrayTypeFor(Var->getTok(), Name, Type, Dims);
+    Ty = arrayTypeFor(Var->getTok(), Name, Type, Dims, false);
   auto *G = new GlobalVariable(*TheModule, Ty, false, GlobalValue::CommonLinkage,
                                Constant::getNullValue(Ty), Name);
   GlobalNamedValues[Name] = G;
@@ -919,13 +992,14 @@ Value *GlobVarDeclAST::codegen() {
 }
 
 //===----------------------------------------------------------------------===//
-// Part 3 - arrays (Steps 11 and 12)
+// Part 3 - arrays (Steps 11 to 13)
 //
 // An array is a variable whose stored type is an LLVM array type, such as
 // [3 x [4 x i32]] for "int a[3][4]". So arrays live in the same symbol tables
 // as other variables, and scoping, shadowing and redeclaration checks need
-// no new code. This section adds the types and declarations (Step 11) and
-// element access through getelementptr (Step 12).
+// no new code. This section adds the types and declarations (Step 11),
+// element access through getelementptr (Step 12), and arrays passed to
+// functions (Step 13).
 //===----------------------------------------------------------------------===//
 
 // Step 11. The number of dimensions of a type: [3 x [4 x i32]] has 2, a
@@ -941,14 +1015,33 @@ static int arrayRank(Type *T) {
   return rank;
 }
 
+// Step 13. An array type written the MiniC way for error messages, such as
+// "int[3][4]", or "int[][4]" for a parameter whose first size was left out.
+static std::string arrayTypeName(Type *T) {
+  std::string dims;
+  while (T->isArrayTy()) {
+    uint64_t n = T->getArrayNumElements();
+    if (n == 0)
+      dims += "[]";
+    else
+      dims += "[" + std::to_string(n) + "]";
+    T = T->getArrayElementType();
+  }
+  return typeName(T) + dims;
+}
+
 // Step 11. Builds the LLVM type of an array declaration and checks the rules
 // from the spec: only int and float elements, 1 to 3 dimensions, and
 // positive sizes. The type is built from the inside out: for "int m[3][4]"
 // we start from i32, wrap the last size to get [4 x i32], then the first to
 // get [3 x [4 x i32]], which is the type expression array(3, array(4, int)).
+//
+// Step 13. A parameter may leave its first size out ("int a[]"), stored as 0
+// by the parser; that is allowed only when allowUnsizedFirst is true.
 static Type *arrayTypeFor(const TOKEN &tok, const std::string &name,
                           const std::string &elemName,
-                          const std::vector<int> &dims) {
+                          const std::vector<int> &dims,
+                          bool allowUnsizedFirst) {
   if (elemName == "bool")
     SemanticError(tok, "invalid array use",
                   "array '" + name +
@@ -961,7 +1054,8 @@ static Type *arrayTypeFor(const TOKEN &tok, const std::string &name,
 
   Type *Ty = typeFromName(elemName);
   for (int d = (int)dims.size() - 1; d >= 0; d--) {
-    if (dims[d] <= 0)
+    bool unsizedOk = allowUnsizedFirst && d == 0;
+    if (dims[d] <= 0 && !unsizedOk)
       SemanticError(tok, "array dimension",
                     "array '" + name + "' has size " + std::to_string(dims[d]) +
                         ": every array size must be a positive integer");
@@ -972,7 +1066,14 @@ static Type *arrayTypeFor(const TOKEN &tok, const std::string &name,
 
 // Step 11. Whether a looked-up variable is an array: its stored type is an
 // array type. Used to stop arrays being read or assigned as plain values.
-static bool isArrayVar(const VarInfo &V) { return V.Ty->isArrayTy(); }
+//
+// Step 13. An array parameter's slot holds a pointer instead, so it counts as
+// an array when the slot is recorded in ArrayParamTypes.
+static bool isArrayVar(const VarInfo &V) {
+  if (V.Ty->isArrayTy())
+    return true;
+  return ArrayParamTypes.count(V.Ptr) > 0;
+}
 
 // Step 11. A local array declaration. The slot is reserved with the same
 // declareLocal as a scalar, just with the array type, so it lands in the
@@ -984,7 +1085,7 @@ static bool isArrayVar(const VarInfo &V) { return V.Ty->isArrayTy(); }
 static void declareLocalArray(const TOKEN &tok, const std::string &name,
                               const std::string &elemName,
                               const std::vector<int> &dims) {
-  Type *ArrTy = arrayTypeFor(tok, name, elemName, dims);
+  Type *ArrTy = arrayTypeFor(tok, name, elemName, dims, false);
   AllocaInst *Slot = declareLocal(tok, name, ArrTy);
   uint64_t Bytes =
       TheModule->getDataLayout().getTypeAllocSize(ArrTy).getFixedValue();
@@ -992,14 +1093,33 @@ static void declareLocalArray(const TOKEN &tok, const std::string &name,
 }
 
 // Step 12. Where an array's elements start, and its array type. For a local
-// or global array that is simply the alloca or global. (It is a struct, not
-// just a pointer, because Step 13 adds array parameters, whose base has to be
-// loaded and indexed differently. It is not called ArrayRef because that
-// name is taken by llvm::ArrayRef.)
+// or global array that is simply the alloca or global. (It is not called
+// ArrayRef because that name is taken by llvm::ArrayRef.)
+//
+// Step 13. For an array parameter the slot holds a pointer, which has to be
+// loaded first; Decayed records that case, because the GEP is built
+// differently for it (see elementAddress).
 struct ArrayBase {
   Value *Base = nullptr;
   Type *ArrTy = nullptr;
+  bool Decayed = false;
 };
+
+// Step 13. The ArrayBase of any array variable: a local or global array is
+// its own base; an array parameter's pointer is loaded from its slot, and
+// its shape comes from ArrayParamTypes.
+static ArrayBase arrayFromVar(const VarInfo &V, const std::string &name) {
+  ArrayBase A;
+  if (V.Ty->isArrayTy()) {
+    A.Base = V.Ptr;
+    A.ArrTy = V.Ty;
+    return A;
+  }
+  A.Base = Builder.CreateLoad(V.Ty, V.Ptr, name + ".ptr");
+  A.ArrTy = ArrayParamTypes[V.Ptr];
+  A.Decayed = true;
+  return A;
+}
 
 // Step 12. Looks up a name that is about to be indexed, as in a[i]. It must
 // be declared, and it must be an array: "int x; x[0] = 1;" is invalid.
@@ -1011,10 +1131,7 @@ static ArrayBase arrayNamed(const TOKEN &tok, const std::string &name) {
   if (!isArrayVar(V))
     SemanticError(tok, "invalid array use",
                   "'" + name + "' is not an array, so it cannot be indexed");
-  ArrayBase A;
-  A.Base = V.Ptr;
-  A.ArrTy = V.Ty;
-  return A;
+  return arrayFromVar(V, name);
 }
 
 // Step 12. Computes the address of a[i], a[i][j] or a[i][j][k] with one GEP,
@@ -1027,6 +1144,12 @@ static ArrayBase arrayNamed(const TOKEN &tok, const std::string &name) {
 // layer, and LLVM computes base + (i * n2 + j) * w from the type itself, the
 // row-major formula from the IR lecture. GEP only computes an address; the
 // caller decides whether to load from it or store to it.
+//
+// Step 13. A decayed parameter's base already points at the first element
+// (or first row), so there is no leading 0: the GEP's source type is one
+// layer smaller and the first index steps over whole elements or rows. With
+// fewer indices than dimensions the result is a row, which only a function
+// argument may use (codegenArrayRef below).
 static Value *elementAddress(const TOKEN &tok, const std::string &name,
                              const ArrayBase &A,
                              std::vector<std::unique_ptr<ASTnode>> &Indices,
@@ -1039,7 +1162,11 @@ static Value *elementAddress(const TOKEN &tok, const std::string &name,
                       std::to_string(Indices.size()) + " indices");
 
   std::vector<Value *> Idx;
-  Idx.push_back(ConstantInt::get(IntTy(), 0));
+  Type *SourceTy = A.ArrTy;
+  if (A.Decayed)
+    SourceTy = A.ArrTy->getArrayElementType();
+  else
+    Idx.push_back(ConstantInt::get(IntTy(), 0));
 
   Type *Ty = A.ArrTy;
   for (unsigned i = 0; i < Indices.size(); i++) {
@@ -1054,7 +1181,7 @@ static Value *elementAddress(const TOKEN &tok, const std::string &name,
   }
 
   *ResultTy = Ty;
-  return Builder.CreateInBoundsGEP(A.ArrTy, A.Base, Idx, name + ".addr");
+  return Builder.CreateInBoundsGEP(SourceTy, A.Base, Idx, name + ".addr");
 }
 
 // Step 12. An element as an assignment target, as in "a[i][j] = 5". Every
@@ -1081,4 +1208,31 @@ Value *ArrayAccessAST::codegen() {
   llvm::Type *ElemTy = nullptr;
   Value *Addr = codegenAddress(&ElemTy);
   return Builder.CreateLoad(ElemTy, Addr, Name + ".elt");
+}
+
+// Step 13. A whole array passed by name, as in "sum(a)". Its address is the
+// address of its first element, which is exactly the pointer C passes. For a
+// parameter that is itself an array, the pointer it holds is passed on. A
+// name that is not an array returns nullptr, and ArgsAST reports it.
+Value *VariableASTnode::codegenArrayRef(llvm::Type **ArrTy) {
+  VarInfo Var = lookupVariable(Name);
+  if (!Var.Ptr)
+    return SemanticError(Tok, "undeclared name",
+                         "use of undeclared variable '" + Name + "'");
+  if (!isArrayVar(Var))
+    return nullptr;
+  ArrayBase A = arrayFromVar(Var, Name);
+  *ArrTy = A.ArrTy;
+  return A.Base;
+}
+
+// Step 13. A row passed to a function, as in "sum(m[i])" with a 2D array m:
+// fewer indices than dimensions leave a smaller array, here [4 x i32], and
+// its address is where that row starts. With every dimension indexed the
+// result is a single element, not an array, so it returns nullptr.
+Value *ArrayAccessAST::codegenArrayRef(llvm::Type **ArrTy) {
+  ArrayBase A = arrayNamed(Tok, Name);
+  if ((int)Indices.size() >= arrayRank(A.ArrTy))
+    return nullptr;
+  return elementAddress(Tok, Name, A, Indices, ArrTy);
 }

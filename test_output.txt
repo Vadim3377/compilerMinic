@@ -1064,5 +1064,397 @@ Program
     `-Return
       `-VarRef 'temp'
 ********************* AST (end) ***********************
-6:3 Semantic error (invalid array use): array elements are not supported yet (Steps 11-12)
 found param in param_list_prime: m
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+
+./array_addition
+PASSED Result: 9
+PASSED Result: 9
+
+Test: array_func_arg_1d
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+`-FunctionDecl 'vector_total' -> int
+  |-Param int 'a'[10]
+  |-Param int 'b'[10]
+  |-Param int 'n'
+  `-Block
+    |-VarDecl int 'i'
+    |-VarDecl int 'total'
+    |-Assign
+    | |-VarRef 'i'
+    | `-IntLiteral 0
+    |-Assign
+    | |-VarRef 'total'
+    | `-IntLiteral 0
+    |-While
+    | |-Condition
+    | | `-BinaryOp '<'
+    | |   |-VarRef 'i'
+    | |   `-VarRef 'n'
+    | `-Body
+    |   `-Block
+    |     |-Assign
+    |     | |-VarRef 'total'
+    |     | `-BinaryOp '+'
+    |     |   |-BinaryOp '+'
+    |     |   | |-VarRef 'total'
+    |     |   | `-ArrayAccess 'a'
+    |     |   |   `-Index
+    |     |   |     `-VarRef 'i'
+    |     |   `-ArrayAccess 'b'
+    |     |     `-Index
+    |     |       `-VarRef 'i'
+    |     `-Assign
+    |       |-VarRef 'i'
+    |       `-BinaryOp '+'
+    |         |-VarRef 'i'
+    |         `-IntLiteral 1
+    `-Return
+      `-VarRef 'total'
+********************* AST (end) ***********************
+found param in param_list_prime: b
+found param in param_list_prime: n
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+
+./array_func_arg
+PASSED Result: 110
+PASSED Result: 110
+
+Test: global_array
+Parsed a variable declaration
+Parsed a top-level variable or function declaration
+Parsed a variable declaration
+Parsed a top-level variable or function declaration
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+|-GlobalVarDecl int 'a'[10]
+|-GlobalVarDecl int 'b'[10][10]
+|-FunctionDecl 'init_arrays' -> int
+| `-Block
+|   |-VarDecl int 'i'
+|   |-VarDecl int 'j'
+|   |-Assign
+|   | |-VarRef 'i'
+|   | `-IntLiteral 0
+|   |-Assign
+|   | |-VarRef 'j'
+|   | `-IntLiteral 0
+|   |-While
+|   | |-Condition
+|   | | `-BinaryOp '<'
+|   | |   |-VarRef 'i'
+|   | |   `-IntLiteral 10
+|   | `-Body
+|   |   `-Block
+|   |     |-Assign
+|   |     | |-VarRef 'j'
+|   |     | `-IntLiteral 0
+|   |     |-While
+|   |     | |-Condition
+|   |     | | `-BinaryOp '<'
+|   |     | |   |-VarRef 'j'
+|   |     | |   `-IntLiteral 10
+|   |     | `-Body
+|   |     |   `-Block
+|   |     |     |-Assign
+|   |     |     | |-ArrayAccess 'b'
+|   |     |     | | |-Index
+|   |     |     | | | `-VarRef 'i'
+|   |     |     | | `-Index
+|   |     |     | |   `-VarRef 'j'
+|   |     |     | `-BinaryOp '*'
+|   |     |     |   |-BinaryOp '+'
+|   |     |     |   | |-VarRef 'i'
+|   |     |     |   | `-IntLiteral 1
+|   |     |     |   `-BinaryOp '+'
+|   |     |     |     |-VarRef 'j'
+|   |     |     |     `-IntLiteral 1
+|   |     |     `-Assign
+|   |     |       |-VarRef 'j'
+|   |     |       `-BinaryOp '+'
+|   |     |         |-VarRef 'j'
+|   |     |         `-IntLiteral 1
+|   |     |-Assign
+|   |     | |-ArrayAccess 'a'
+|   |     | | `-Index
+|   |     | |   `-VarRef 'i'
+|   |     | `-BinaryOp '+'
+|   |     |   |-VarRef 'i'
+|   |     |   `-IntLiteral 1
+|   |     `-Assign
+|   |       |-VarRef 'i'
+|   |       `-BinaryOp '+'
+|   |         |-VarRef 'i'
+|   |         `-IntLiteral 1
+|   `-Return
+|     `-IntLiteral 0
+`-FunctionDecl 'vector_weighted_total' -> int
+  `-Block
+    |-VarDecl int 'total'
+    |-VarDecl int 'i'
+    |-VarDecl int 'j'
+    |-Call 'init_arrays' (no arguments)
+    |-Assign
+    | |-VarRef 'i'
+    | `-IntLiteral 0
+    |-Assign
+    | |-VarRef 'j'
+    | `-IntLiteral 0
+    |-Assign
+    | |-VarRef 'total'
+    | `-IntLiteral 0
+    |-While
+    | |-Condition
+    | | `-BinaryOp '<'
+    | |   |-VarRef 'i'
+    | |   `-IntLiteral 10
+    | `-Body
+    |   `-Block
+    |     |-Assign
+    |     | |-VarRef 'j'
+    |     | `-IntLiteral 0
+    |     |-While
+    |     | |-Condition
+    |     | | `-BinaryOp '<'
+    |     | |   |-VarRef 'j'
+    |     | |   `-IntLiteral 10
+    |     | `-Body
+    |     |   `-Block
+    |     |     |-Assign
+    |     |     | |-VarRef 'total'
+    |     |     | `-BinaryOp '+'
+    |     |     |   |-VarRef 'total'
+    |     |     |   `-BinaryOp '*'
+    |     |     |     |-ArrayAccess 'a'
+    |     |     |     | `-Index
+    |     |     |     |   `-VarRef 'i'
+    |     |     |     `-ArrayAccess 'b'
+    |     |     |       |-Index
+    |     |     |       | `-VarRef 'i'
+    |     |     |       `-Index
+    |     |     |         `-VarRef 'j'
+    |     |     `-Assign
+    |     |       |-VarRef 'j'
+    |     |       `-BinaryOp '+'
+    |     |         |-VarRef 'j'
+    |     |         `-IntLiteral 1
+    |     `-Assign
+    |       |-VarRef 'i'
+    |       `-BinaryOp '+'
+    |         |-VarRef 'i'
+    |         `-IntLiteral 1
+    `-Return
+      `-VarRef 'total'
+********************* AST (end) ***********************
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+
+./global_array
+PASSED Result: 21175
+PASSED Result: 21175
+
+Test: matrix_multiplication
+Parsed parameter list for function
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed an expression statement
+Parsed a list of statements
+Parsed a block
+Parsed a while statment
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+`-FunctionDecl 'matrix_mul' -> int
+  |-Param float 'a'[10][10]
+  |-Param float 'b'[10][10]
+  |-Param float 'c'[10][10]
+  |-Param int 'n'
+  `-Block
+    |-VarDecl int 'i'
+    |-VarDecl int 'j'
+    |-VarDecl int 'k'
+    |-Assign
+    | |-VarRef 'i'
+    | `-IntLiteral 0
+    |-While
+    | |-Condition
+    | | `-BinaryOp '<'
+    | |   |-VarRef 'i'
+    | |   `-VarRef 'n'
+    | `-Body
+    |   `-Block
+    |     |-Assign
+    |     | |-VarRef 'j'
+    |     | `-IntLiteral 0
+    |     |-While
+    |     | |-Condition
+    |     | | `-BinaryOp '<'
+    |     | |   |-VarRef 'j'
+    |     | |   `-VarRef 'n'
+    |     | `-Body
+    |     |   `-Block
+    |     |     |-Assign
+    |     |     | |-VarRef 'k'
+    |     |     | `-IntLiteral 0
+    |     |     |-While
+    |     |     | |-Condition
+    |     |     | | `-BinaryOp '<'
+    |     |     | |   |-VarRef 'k'
+    |     |     | |   `-VarRef 'n'
+    |     |     | `-Body
+    |     |     |   `-Block
+    |     |     |     |-Assign
+    |     |     |     | |-ArrayAccess 'c'
+    |     |     |     | | |-Index
+    |     |     |     | | | `-VarRef 'i'
+    |     |     |     | | `-Index
+    |     |     |     | |   `-VarRef 'j'
+    |     |     |     | `-BinaryOp '+'
+    |     |     |     |   |-ArrayAccess 'c'
+    |     |     |     |   | |-Index
+    |     |     |     |   | | `-VarRef 'i'
+    |     |     |     |   | `-Index
+    |     |     |     |   |   `-VarRef 'j'
+    |     |     |     |   `-BinaryOp '*'
+    |     |     |     |     |-ArrayAccess 'a'
+    |     |     |     |     | |-Index
+    |     |     |     |     | | `-VarRef 'i'
+    |     |     |     |     | `-Index
+    |     |     |     |     |   `-VarRef 'k'
+    |     |     |     |     `-ArrayAccess 'b'
+    |     |     |     |       |-Index
+    |     |     |     |       | `-VarRef 'k'
+    |     |     |     |       `-Index
+    |     |     |     |         `-VarRef 'j'
+    |     |     |     `-Assign
+    |     |     |       |-VarRef 'k'
+    |     |     |       `-BinaryOp '+'
+    |     |     |         |-VarRef 'k'
+    |     |     |         `-IntLiteral 1
+    |     |     `-Assign
+    |     |       |-VarRef 'j'
+    |     |       `-BinaryOp '+'
+    |     |         |-VarRef 'j'
+    |     |         `-IntLiteral 1
+    |     `-Assign
+    |       |-VarRef 'i'
+    |       `-BinaryOp '+'
+    |         |-VarRef 'i'
+    |         `-IntLiteral 1
+    `-Return
+      `-IntLiteral 0
+********************* AST (end) ***********************
+found param in param_list_prime: b
+found param in param_list_prime: c
+found param in param_list_prime: n
+********************* FINAL IR (begin) ****************************
+********************* FINAL IR (end) ******************************
+warning: overriding the module target triple with x86_64-unknown-linux-gnu [-Woverride-module]
+1 warning generated.
+
+./matrix_mul
+PASSED Result: 
+Matrix Multiplication Test: PASSED
+PASSED Result: 
+
+***** ALL TESTS PASSED *****

@@ -150,7 +150,8 @@ static std::vector<int> ParseDims(bool allowUnsizedFirst) {
 }
 
 // param ::= var_type IDENT param_dims
-// (Step 13 added param_dims, so a parameter can be an array: "int a[10]".)
+// (Step 10 added param_dims, so a parameter can be an array: "int a[10]";
+// Step 13 generates code for such parameters.)
 //
 // Starter, fixed in Part 1: the original version read the type, then never
 // created the ParamAST, so every parameter silently vanished from the

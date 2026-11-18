@@ -1,4 +1,4 @@
-// codegen.cpp - turns the AST into LLVM IR (Part 2).
+// codegen.cpp - turns the AST into LLVM IR (Parts 2 and 3).
 //
 // The work is split into steps that each make one more kind of MiniC
 // program compile:
@@ -10,7 +10,10 @@
 //   Step 6  if and while
 //   Step 7  short-circuit && and ||
 //   Step 8  global variables
-// Each step's functions are in their own section, in this order.
+//   Steps 11 and 12  arrays: declarations, reading and writing elements
+// Each step's functions are in their own section, in this order. All array
+// code is in one section at the end of the file; where an array step changed
+// an earlier function, that function's comment says so.
 //
 // Two rules hold everywhere. First, every MiniC variable lives in memory (an
 // alloca on the stack, or a global), and is read with load and written with
@@ -225,6 +228,17 @@ static AllocaInst *declareLocal(const TOKEN &tok, const std::string &name,
   return Slot;
 }
 
+// Part 3. Array helpers used by functions from earlier steps. They are only
+// declared here; their code is in the arrays section at the end of the file,
+// so that everything about arrays stays together.
+static Type *arrayTypeFor(const TOKEN &tok, const std::string &name,
+                          const std::string &elemName,
+                          const std::vector<int> &dims);
+static bool isArrayVar(const VarInfo &V);
+static void declareLocalArray(const TOKEN &tok, const std::string &name,
+                              const std::string &elemName,
+                              const std::vector<int> &dims);
+
 //===----------------------------------------------------------------------===//
 // Step 2 - literals, functions, blocks, return and the program
 //
@@ -436,7 +450,14 @@ Value *ProgramAST::codegen() {
 // and complains if the same block already declared x. MiniC has no
 // initialisers, so nothing is stored yet, and a declaration is not an
 // expression, so there is no value to return.
+//
+// Step 11. A declaration with sizes, such as "int a[3][4];", is an array and
+// is handed to declareLocalArray in the arrays section.
 Value *VarDeclAST::codegen() {
+  if (!Dims.empty()) {
+    declareLocalArray(Var->getTok(), Var->getName(), Type, Dims);
+    return nullptr;
+  }
   declareLocal(Var->getTok(), Var->getName(), typeFromName(Type));
   return nullptr;
 }
@@ -450,6 +471,10 @@ Value *VarDeclAST::codegen() {
 //
 // If the name is not found, it may still be a function name used without
 // brackets ("x = f;"), which deserves a clearer message than "undeclared".
+//
+// Step 12. A whole array is not a value in MiniC: "x = a;" or "a + 1" must
+// index it first, so a plain name that turns out to be an array is an
+// "invalid array use" error.
 Value *VariableASTnode::codegen() {
   VarInfo Var = lookupVariable(Name);
   if (!Var.Ptr) {
@@ -459,6 +484,10 @@ Value *VariableASTnode::codegen() {
     return SemanticError(Tok, "undeclared name",
                          "use of undeclared variable '" + Name + "'");
   }
+  if (isArrayVar(Var))
+    return SemanticError(Tok, "invalid array use",
+                         "'" + Name + "' is an array: index it, as in " +
+                             Name + "[0], to use an element");
   return Builder.CreateLoad(Var.Ty, Var.Ptr, Name);
 }
 
@@ -497,13 +526,19 @@ Value *AssignAST::codegen() {
 }
 
 // Step 10. The address of a plain variable as an assignment target is its
-// slot, and the variable must be declared. (Step 12 adds one more check
-// here: a whole array cannot be assigned.)
+// slot, and the variable must be declared.
+//
+// Step 12. It must not be an array either, because MiniC has no assignment
+// of whole arrays ("a = b;" or "a = 5;").
 Value *VariableASTnode::codegenAddress(llvm::Type **Ty) {
   VarInfo Var = lookupVariable(Name);
   if (!Var.Ptr)
     return SemanticError(Tok, "undeclared name",
                          "assignment to undeclared variable '" + Name + "'");
+  if (isArrayVar(Var))
+    return SemanticError(Tok, "invalid array use",
+                         "cannot assign to the whole array '" + Name +
+                             "': assign to its elements instead");
   *Ty = Var.Ty;
   return Var.Ptr;
 }
@@ -861,6 +896,10 @@ Value *ExprAST::codegenLogical() {
 // emit an uninitialised global; LLVM requires a common global to have a zero
 // initialiser, and the verifier rejects one without any initialiser at all.
 // A test driver that declares the same global as "extern" can also see it.
+//
+// Step 11. A global array gets its array type from arrayTypeFor; the zero
+// initialiser of an array type is "zeroinitializer", so every element starts
+// at 0 as the spec requires, at no cost at run time.
 Value *GlobVarDeclAST::codegen() {
   const std::string &Name = Var->getName();
   if (GlobalNamedValues.count(Name) > 0)
@@ -871,6 +910,8 @@ Value *GlobVarDeclAST::codegen() {
                          "'" + Name + "' is already declared as a function");
 
   llvm::Type *Ty = typeFromName(Type);
+  if (!Dims.empty())
+    Ty = arrayTypeFor(Var->getTok(), Name, Type, Dims);
   auto *G = new GlobalVariable(*TheModule, Ty, false, GlobalValue::CommonLinkage,
                                Constant::getNullValue(Ty), Name);
   GlobalNamedValues[Name] = G;
@@ -878,24 +919,166 @@ Value *GlobVarDeclAST::codegen() {
 }
 
 //===----------------------------------------------------------------------===//
-// Step 10 - temporary placeholders until Steps 11 to 13
+// Part 3 - arrays (Steps 11 and 12)
 //
-// ast.h now declares these functions, so they must exist for the program to
-// link. Until arrays get real code, using one is reported as an error, which
-// keeps every Part 2 program working while the parser already accepts
-// array syntax. Steps 12 and 13 replace this whole section.
+// An array is a variable whose stored type is an LLVM array type, such as
+// [3 x [4 x i32]] for "int a[3][4]". So arrays live in the same symbol tables
+// as other variables, and scoping, shadowing and redeclaration checks need
+// no new code. This section adds the types and declarations (Step 11) and
+// element access through getelementptr (Step 12).
 //===----------------------------------------------------------------------===//
 
-Value *ArrayAccessAST::codegen() {
-  return SemanticError(Tok, "invalid array use",
-                       "array elements are not supported yet (Steps 11-12)");
+// Step 11. The number of dimensions of a type: [3 x [4 x i32]] has 2, a
+// plain i32 has 0. Every index peels off one layer (the type rule
+// a : array(n, T), i : int gives a[i] : T), so this is how many indices
+// reach a single element.
+static int arrayRank(Type *T) {
+  int rank = 0;
+  while (T->isArrayTy()) {
+    T = T->getArrayElementType();
+    rank++;
+  }
+  return rank;
 }
 
+// Step 11. Builds the LLVM type of an array declaration and checks the rules
+// from the spec: only int and float elements, 1 to 3 dimensions, and
+// positive sizes. The type is built from the inside out: for "int m[3][4]"
+// we start from i32, wrap the last size to get [4 x i32], then the first to
+// get [3 x [4 x i32]], which is the type expression array(3, array(4, int)).
+static Type *arrayTypeFor(const TOKEN &tok, const std::string &name,
+                          const std::string &elemName,
+                          const std::vector<int> &dims) {
+  if (elemName == "bool")
+    SemanticError(tok, "invalid array use",
+                  "array '" + name +
+                      "' has element type bool: only int and float arrays "
+                      "are allowed");
+  if (dims.size() > 3)
+    SemanticError(tok, "array dimension",
+                  "array '" + name + "' has " + std::to_string(dims.size()) +
+                      " dimensions, but at most 3 are allowed");
+
+  Type *Ty = typeFromName(elemName);
+  for (int d = (int)dims.size() - 1; d >= 0; d--) {
+    if (dims[d] <= 0)
+      SemanticError(tok, "array dimension",
+                    "array '" + name + "' has size " + std::to_string(dims[d]) +
+                        ": every array size must be a positive integer");
+    Ty = ArrayType::get(Ty, dims[d]);
+  }
+  return Ty;
+}
+
+// Step 11. Whether a looked-up variable is an array: its stored type is an
+// array type. Used to stop arrays being read or assigned as plain values.
+static bool isArrayVar(const VarInfo &V) { return V.Ty->isArrayTy(); }
+
+// Step 11. A local array declaration. The slot is reserved with the same
+// declareLocal as a scalar, just with the array type, so it lands in the
+// entry block and in the current scope. The spec says elements start at 0
+// (C leaves them undefined, so clang emits nothing here), so the whole array
+// is cleared with a memset of its size in bytes. The memset is emitted where
+// the declaration stands, not in the entry block, so an array declared inside
+// a loop body is cleared again on every iteration.
+static void declareLocalArray(const TOKEN &tok, const std::string &name,
+                              const std::string &elemName,
+                              const std::vector<int> &dims) {
+  Type *ArrTy = arrayTypeFor(tok, name, elemName, dims);
+  AllocaInst *Slot = declareLocal(tok, name, ArrTy);
+  uint64_t Bytes =
+      TheModule->getDataLayout().getTypeAllocSize(ArrTy).getFixedValue();
+  Builder.CreateMemSet(Slot, Builder.getInt8(0), Bytes, Slot->getAlign());
+}
+
+// Step 12. Where an array's elements start, and its array type. For a local
+// or global array that is simply the alloca or global. (It is a struct, not
+// just a pointer, because Step 13 adds array parameters, whose base has to be
+// loaded and indexed differently. It is not called ArrayRef because that
+// name is taken by llvm::ArrayRef.)
+struct ArrayBase {
+  Value *Base = nullptr;
+  Type *ArrTy = nullptr;
+};
+
+// Step 12. Looks up a name that is about to be indexed, as in a[i]. It must
+// be declared, and it must be an array: "int x; x[0] = 1;" is invalid.
+static ArrayBase arrayNamed(const TOKEN &tok, const std::string &name) {
+  VarInfo V = lookupVariable(name);
+  if (!V.Ptr)
+    SemanticError(tok, "undeclared name",
+                  "use of undeclared array '" + name + "'");
+  if (!isArrayVar(V))
+    SemanticError(tok, "invalid array use",
+                  "'" + name + "' is not an array, so it cannot be indexed");
+  ArrayBase A;
+  A.Base = V.Ptr;
+  A.ArrTy = V.Ty;
+  return A;
+}
+
+// Step 12. Computes the address of a[i], a[i][j] or a[i][j][k] with one GEP,
+// and returns the type found at that address in *ResultTy. Every index must
+// be an int (a bool widens to int, as everywhere in MiniC; a float is an
+// error), and there cannot be more indices than dimensions.
+//
+// The GEP's first index is 0: the base points at the whole array, and 0 means
+// "this array, not the one after it". Each further index then selects one
+// layer, and LLVM computes base + (i * n2 + j) * w from the type itself, the
+// row-major formula from the IR lecture. GEP only computes an address; the
+// caller decides whether to load from it or store to it.
+static Value *elementAddress(const TOKEN &tok, const std::string &name,
+                             const ArrayBase &A,
+                             std::vector<std::unique_ptr<ASTnode>> &Indices,
+                             Type **ResultTy) {
+  int rank = arrayRank(A.ArrTy);
+  if ((int)Indices.size() > rank)
+    SemanticError(tok, "array dimension",
+                  "'" + name + "' has " + std::to_string(rank) +
+                      " dimension(s) but is used with " +
+                      std::to_string(Indices.size()) + " indices");
+
+  std::vector<Value *> Idx;
+  Idx.push_back(ConstantInt::get(IntTy(), 0));
+
+  Type *Ty = A.ArrTy;
+  for (unsigned i = 0; i < Indices.size(); i++) {
+    std::string which = "index " + std::to_string(i + 1) + " of '" + name + "'";
+    Value *V = requireValue(Indices[i]->codegen(), tok, which);
+    Value *I = widen(V, IntTy());
+    if (!I)
+      SemanticError(tok, "type",
+                    which + " must be an int, not " + typeName(V->getType()));
+    Idx.push_back(I);
+    Ty = Ty->getArrayElementType();
+  }
+
+  *ResultTy = Ty;
+  return Builder.CreateInBoundsGEP(A.ArrTy, A.Base, Idx, name + ".addr");
+}
+
+// Step 12. An element as an assignment target, as in "a[i][j] = 5". Every
+// dimension must be indexed: with fewer indices, "m[1] = 5" would assign a
+// whole row, which is an "array dimension" error. AssignAST::codegen (Step 3,
+// changed in Step 10) stores to the address this returns.
 Value *ArrayAccessAST::codegenAddress(llvm::Type **Ty) {
-  return SemanticError(Tok, "invalid array use",
-                       "array elements are not supported yet (Steps 11-12)");
+  ArrayBase A = arrayNamed(Tok, Name);
+  int rank = arrayRank(A.ArrTy);
+  if ((int)Indices.size() < rank)
+    return SemanticError(Tok, "array dimension",
+                         "'" + Name + "' has " + std::to_string(rank) +
+                             " dimensions but only " +
+                             std::to_string(Indices.size()) +
+                             " index(es) are given: a single element needs " +
+                             std::to_string(rank));
+  return elementAddress(Tok, Name, A, Indices, Ty);
 }
 
-Value *ArrayAccessAST::codegenArrayRef(llvm::Type **ArrTy) { return nullptr; }
-
-Value *VariableASTnode::codegenArrayRef(llvm::Type **ArrTy) { return nullptr; }
+// Step 12. An element used as a value, as in "x = a[i] + 1". It needs the
+// same full set of indices as an assignment, so the address comes from
+// codegenAddress, and the element is then loaded from it.
+Value *ArrayAccessAST::codegen() {
+  llvm::Type *ElemTy = nullptr;
+  Value *Addr = codegenAddress(&ElemTy);
+  return Builder.CreateLoad(ElemTy, Addr, Name + ".elt");
+}

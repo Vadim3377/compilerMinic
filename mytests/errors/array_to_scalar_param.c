@@ -1,0 +1,2 @@
+// EXPECT: invalid array use
+int f(int x) { return x; } int main() { int a[3]; return f(a); }

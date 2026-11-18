@@ -1,0 +1,2 @@
+// EXPECT: Syntax error
+int g[3] int main() { return 0; }

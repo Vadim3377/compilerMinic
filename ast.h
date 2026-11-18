@@ -135,7 +135,6 @@ public:
   bool isAssignable() const override { return true; }      // Step 10
   std::string targetName() const override { return Name; } // Step 10
   llvm::Value *codegenAddress(llvm::Type **Ty) override;   // Step 12
-  llvm::Value *codegenArrayRef(llvm::Type **ArrTy) override; // Step 13
   std::string to_string() const override { return "VarRef '" + Name + "'"; }
 };
 
@@ -317,7 +316,6 @@ public:
   bool isAssignable() const override { return true; }        // Step 10
   std::string targetName() const override { return Name + "[...]"; }
   llvm::Value *codegenAddress(llvm::Type **Ty) override;     // Step 12
-  llvm::Value *codegenArrayRef(llvm::Type **ArrTy) override; // Step 13
   std::string to_string() const override {
     std::vector<std::string> kids;
     for (const auto &index : Indices)

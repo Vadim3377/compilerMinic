@@ -1014,5 +1014,55 @@ PASSED Result:
 
 Test: array_addition
 Parsed parameter list for function
-3:17 Syntax error: Expected ';' to end local variable declaration
+Parsed a local variable declaration
+Parsed a local variable declaration
+Parsed a set of local variable declaration
+Parsed an expression statement
+Parsed an expression statement
+Parsed an expression statement
+Parsed a return statment
+Parsed a list of statements
+Parsed block of statements in function
+Parsed a function declaration
+Parsed a top-level variable or function declaration
+Parsing Finished: program is syntactically valid
+********************* AST (begin) *********************
+Program
+`-FunctionDecl 'arr_addition' -> int
+  |-Param int 'n'
+  |-Param int 'm'
+  `-Block
+    |-VarDecl int 'arr_result'[10][5]
+    |-VarDecl int 'temp'
+    |-Assign
+    | |-ArrayAccess 'arr_result'
+    | | |-Index
+    | | | `-IntLiteral 0
+    | | `-Index
+    | |   `-IntLiteral 0
+    | `-VarRef 'm'
+    |-Assign
+    | |-ArrayAccess 'arr_result'
+    | | |-Index
+    | | | `-IntLiteral 1
+    | | `-Index
+    | |   `-IntLiteral 2
+    | `-VarRef 'n'
+    |-Assign
+    | |-VarRef 'temp'
+    | `-BinaryOp '+'
+    |   |-ArrayAccess 'arr_result'
+    |   | |-Index
+    |   | | `-IntLiteral 0
+    |   | `-Index
+    |   |   `-IntLiteral 0
+    |   `-ArrayAccess 'arr_result'
+    |     |-Index
+    |     | `-IntLiteral 1
+    |     `-Index
+    |       `-IntLiteral 2
+    `-Return
+      `-VarRef 'temp'
+********************* AST (end) ***********************
+6:3 Semantic error (invalid array use): array elements are not supported yet (Steps 11-12)
 found param in param_list_prime: m

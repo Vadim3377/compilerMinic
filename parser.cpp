@@ -19,8 +19,9 @@
 //===----------------------------------------------------------------------===//
 // Token buffer (starter)
 //
-// CurTok is the token the parser is looking at. putBackToken lets the parser
-// look one token further ahead and then undo it, which ParseExper needs.
+// CurTok is the token the parser is looking at. The starter's putBackToken
+// was needed for the two-token lookahead in ParseExper; Step 10 made that
+// rule LL(1), so it is gone.
 //===----------------------------------------------------------------------===//
 
 static TOKEN CurTok;
@@ -36,8 +37,6 @@ static TOKEN getNextToken() {
 
   return CurTok = temp;
 }
-
-static void putBackToken(TOKEN tok) { tok_buffer.push_front(tok); }
 
 // Top-level declarations are collected here while parsing, and ParseProgram
 // moves them into the ProgramAST root at the end.
@@ -123,7 +122,35 @@ static std::vector<std::unique_ptr<ParamAST>> ParseParamListPrime() {
   return param_list;
 }
 
-// param ::= var_type IDENT
+// dims ::= "[" INT_LIT "]" dims | ε
+// Step 10. The sizes after a name in an array declaration, as in
+// "int a[3][4];". Sizes must be integer literals, because the memory is
+// reserved when the program is compiled. A parameter may leave the first
+// size out ("int a[]"), stored as 0, since a function never needs it to
+// find an element (see the theory section on row-major layout). Whether
+// there are at most 3 dimensions and the sizes are positive is checked in
+// codegen, so the error can say "array dimension".
+static std::vector<int> ParseDims(bool allowUnsizedFirst) {
+  std::vector<int> dims;
+  while (CurTok.type == LBOX) {
+    getNextToken(); // eat "["
+    if (CurTok.type == INT_LIT) {
+      dims.push_back(CurTok.getIntVal());
+      getNextToken(); // eat the size
+    } else if (CurTok.type == RBOX && allowUnsizedFirst && dims.empty()) {
+      dims.push_back(0);
+    } else {
+      LogError(CurTok, "expected an integer literal as the array size");
+    }
+    if (CurTok.type != RBOX)
+      LogError(CurTok, "expected ']' after array size");
+    getNextToken(); // eat "]"
+  }
+  return dims;
+}
+
+// param ::= var_type IDENT param_dims
+// (Step 13 added param_dims, so a parameter can be an array: "int a[10]".)
 //
 // Starter, fixed in Part 1: the original version read the type, then never
 // created the ParamAST, so every parameter silently vanished from the
@@ -145,7 +172,8 @@ static std::unique_ptr<ParamAST> ParseParam() {
   std::string Name = CurTok.getIdentifierStr();
   getNextToken(); // eat "IDENT"
 
-  return std::make_unique<ParamAST>(Name, Type);
+  std::vector<int> dims = ParseDims(true);
+  return std::make_unique<ParamAST>(Name, Type, std::move(dims));
 }
 
 // param_list ::= param param_list_prime   (starter)
@@ -231,9 +259,11 @@ static bool inFirstExpr(int t) {
 // production. They nest: whatever may follow a lower-precedence level may
 // also follow a higher one, plus the operators of the level in between.
 // For example after "a * b" we may see "+", because "a * b + c" is valid.
-// FOLLOW(rval') = { ")", ",", ";" }
+// FOLLOW(rval') = { ")", ",", ";", "]", "=" }
+// Step 10 added "]" (an index expression ends there, as in a[i + 1]) and
+// "=" (the left side of an assignment is now parsed as an rval first).
 static bool inFollowRvalPrime(int t) {
-  return t == RPAR || t == COMMA || t == SC;
+  return t == RPAR || t == COMMA || t == SC || t == RBOX || t == ASSIGN;
 }
 // FOLLOW(and_expr') = FOLLOW(rval') + { "||" }
 static bool inFollowAndPrime(int t) { return inFollowRvalPrime(t) || t == OR; }
@@ -283,12 +313,35 @@ static std::vector<std::unique_ptr<ASTnode>> ParseArgs() {
   return args;
 }
 
-// ident_tail ::= "(" args ")" | ε
+// indices ::= "[" expr "]" indices | ε
+// Step 10. The index expressions of an element access, as many as are
+// written. Each one is a full expression, so a[(i + 1) * f(k)] works, and
+// FOLLOW(rval') contains "]" so the expression stops at the bracket.
+static std::vector<std::unique_ptr<ASTnode>> ParseIndices() {
+  std::vector<std::unique_ptr<ASTnode>> indices;
+  while (CurTok.type == LBOX) {
+    getNextToken(); // eat "["
+    indices.push_back(ParseExper());
+    if (CurTok.type != RBOX)
+      LogError(CurTok, "expected ']' after array index");
+    getNextToken(); // eat "]"
+  }
+  return indices;
+}
+
+// ident_tail ::= "(" args ")" | "[" expr "]" indices | ε
 // The starter grammar had "IDENT | IDENT ( args )", two alternatives with the
 // same first token. Left factoring pulls IDENT out, and this function decides
-// afterwards whether it was a call or a plain variable.
+// afterwards whether it was a call, a plain variable or (Step 10) an array
+// element. Element access sits here, beside calls, because the spec puts it
+// at the same precedence as a function call.
 static std::unique_ptr<ASTnode> ParseIdentTail(TOKEN identTok) {
   std::string Name = identTok.getIdentifierStr();
+
+  if (CurTok.type == LBOX) { // array element: a[i], m[i][j]
+    auto indices = ParseIndices();
+    return std::make_unique<ArrayAccessAST>(identTok, Name, std::move(indices));
+  }
 
   if (CurTok.type == LPAR) { // function call
     getNextToken();          // eat "("
@@ -359,8 +412,8 @@ static std::unique_ptr<ASTnode> ParseMulExprPrime(std::unique_ptr<ASTnode> lhs) 
   // FOLLOW(mul_expr') already contains every operator of the lower levels,
   // so a bad token straight after an operand is always caught here, and
   // this is the place for the most helpful error message.
-  std::string msg = "expected an operator, ';', ')' or ',' after expression, "
-                    "but found '" + CurTok.lexeme + "'";
+  std::string msg = "expected an operator, ';', ')', ']', ',' or '=' after "
+                    "expression, but found '" + CurTok.lexeme + "'";
   return LogError(CurTok, msg.c_str());
 }
 
@@ -465,33 +518,32 @@ static std::unique_ptr<ASTnode> ParseRval() {
   return ParseRvalPrime(ParseAndExpr());
 }
 
-// expr ::= IDENT "=" expr
-//      |  rval
+// expr      ::= rval expr_tail
+// expr_tail ::= "=" expr | ε
 //
-// This is the one place the grammar is not LL(1): both alternatives can
-// start with IDENT ("x = 1" and "x + 1"), and left factoring does not help
-// because rval can begin with IDENT deep inside it. So we peek one token
-// further. If the token after IDENT is "=" it is an assignment, otherwise we
-// push the peeked token back and parse an rval as normal. Assignment calls
-// ParseExper again for its right side, which makes a = b = c right
-// associative, as in C.
+// Step 10 rewrote this rule. Part 1 had "expr ::= IDENT "=" expr | rval",
+// which needed two tokens of lookahead to see the "=". With arrays the "=" can
+// be arbitrarily far away ("a[i + 1][j] = 3"), so no fixed lookahead works.
+// The fix used by real C compilers: parse the left side as an ordinary
+// expression first, and only when the next token is "=" check that what we
+// parsed can be assigned to (a variable or an array element). The grammar is
+// LL(1) again; "x + 1 = 2" parses as an rval and is then rejected here.
+// The right side calls ParseExper again, so a = b = c is right associative.
 static std::unique_ptr<ASTnode> ParseExper() {
-  if (CurTok.type == IDENT) {
-    TOKEN identTok = CurTok;
-    TOKEN next = getNextToken();
-    if (next.type == ASSIGN) {
-      getNextToken(); // eat "="
-      auto var =
-          std::make_unique<VariableASTnode>(identTok, identTok.getIdentifierStr());
-      auto val = ParseExper();
-      return std::make_unique<AssignAST>(std::move(var), std::move(val));
-    }
-    putBackToken(next);
-    CurTok = identTok;
-  }
   if (!inFirstExpr(CurTok.type))
     return LogError(CurTok, "expected an expression");
-  return ParseRval();
+  auto lhs = ParseRval();
+
+  if (CurTok.type == ASSIGN) {
+    TOKEN eqTok = CurTok;
+    if (!lhs->isAssignable())
+      return LogError(eqTok, "the left-hand side of '=' must be a variable "
+                             "or an array element");
+    getNextToken(); // eat "="
+    auto val = ParseExper();
+    return std::make_unique<AssignAST>(eqTok, std::move(lhs), std::move(val));
+  }
+  return lhs;
 }
 
 //===----------------------------------------------------------------------===//
@@ -740,10 +792,10 @@ static std::vector<std::unique_ptr<VarDeclAST>> ParseLocalDeclsPrime() {
   return local_decls_prime;
 }
 
-// local_decl ::= var_type IDENT ";"
+// local_decl ::= var_type IDENT dims ";"
 // var_type ::= "int"
 //           |  "float"
-//           |  "bool"             (starter)
+//           |  "bool"             (starter; Step 10 added dims for arrays)
 static std::unique_ptr<VarDeclAST> ParseLocalDecl() {
   TOKEN PrevTok;
   std::string Type;
@@ -758,11 +810,13 @@ static std::unique_ptr<VarDeclAST> ParseLocalDecl() {
       Type = PrevTok.lexeme;
       Name = CurTok.getIdentifierStr();
       auto ident = std::make_unique<VariableASTnode>(CurTok, Name);
-      local_decl = std::make_unique<VarDeclAST>(std::move(ident), Type);
 
       getNextToken(); // eat 'IDENT'
+      std::vector<int> dims = ParseDims(false);
+      local_decl =
+          std::make_unique<VarDeclAST>(std::move(ident), Type, std::move(dims));
       if (CurTok.type != SC) {
-        LogError(CurTok, "Expected ';' to end local variable declaration");
+        LogError(CurTok, "Expected '[' or ';' to end local variable declaration");
         return nullptr;
       }
       getNextToken(); // eat ';'
@@ -807,8 +861,8 @@ static std::unique_ptr<ASTnode> ParseBlock() {
 //       |  fun_decl
 //
 // Both start with "type IDENT", so this starter function reads those two
-// tokens first and then looks at the third: ";" means a global variable and
-// "(" means a function. One Part 1 fix: the starter read the identifier
+// tokens first and then looks at the third: ";" means a global variable,
+// "[" a global array (Step 10) and "(" a function. One Part 1 fix: the starter read the identifier
 // before checking it was one, so "int ;" stopped with a confusing internal
 // message instead of a syntax error.
 static std::unique_ptr<ASTnode> ParseDecl() {
@@ -827,13 +881,16 @@ static std::unique_ptr<ASTnode> ParseDecl() {
       IdTok = CurTok;
       auto ident = std::make_unique<VariableASTnode>(CurTok, IdName);
       getNextToken(); // eat the IDENT
-      if (CurTok.type == SC) { // global variable declaration
+      if (CurTok.type == SC || CurTok.type == LBOX) { // global variable or array
+        std::vector<int> dims = ParseDims(false);
+        if (CurTok.type != SC)
+          return LogError(CurTok, "expected ';' after global array declaration");
         getNextToken(); // eat ;
         fprintf(stderr, "Parsed a variable declaration\n");
 
         if (PrevTok.type != VOID_TOK)
-          return std::make_unique<GlobVarDeclAST>(std::move(ident),
-                                                  PrevTok.lexeme);
+          return std::make_unique<GlobVarDeclAST>(
+              std::move(ident), PrevTok.lexeme, std::move(dims));
         else
           return LogError(PrevTok,
                           "Cannot have variable declaration with type 'void'");
@@ -864,7 +921,7 @@ static std::unique_ptr<ASTnode> ParseDecl() {
         return std::make_unique<FunctionDeclAST>(std::move(Proto),
                                                  std::move(B));
       } else
-        return LogError(CurTok, "expected ';' or ('");
+        return LogError(CurTok, "expected ';', '[' or '('");
     } else
       return LogError(CurTok, "expected an identifier");
 

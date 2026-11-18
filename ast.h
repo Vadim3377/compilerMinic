@@ -40,7 +40,24 @@ public:
   virtual ~ASTnode() {}
   virtual llvm::Value *codegen() { return nullptr; };
   virtual std::string to_string() const { return ""; };
+
+  // Step 10. Only a variable or an array element may stand on the left of
+  // "=". The parser asks the node itself, because the compiler is built
+  // without RTTI, so dynamic_cast is not available.
+  virtual bool isAssignable() const { return false; }
+  // Step 10. The name to use in assignment error messages ("x", "a[...]").
+  virtual std::string targetName() const { return ""; }
+  // Step 12. The address an assignment stores to, with the type stored
+  // there in *Ty. Only assignable nodes override it.
+  virtual llvm::Value *codegenAddress(llvm::Type **Ty) { return nullptr; }
+  // Step 13. The address of a whole array or a row, for passing it to a
+  // function, with its array type in *ArrTy. nullptr means "not an array".
+  virtual llvm::Value *codegenArrayRef(llvm::Type **ArrTy) { return nullptr; }
 };
+
+// Step 10. Prints array sizes after a name, e.g. "[3][4]". A 0 stands for an
+// unsized first dimension of a parameter and prints as "[]".
+std::string dimsToString(const std::vector<int> &dims);
 
 std::string nodeToString(const ASTnode *node);
 
@@ -115,20 +132,31 @@ public:
   // such as "undeclared variable" at the variable's own position.
   const TOKEN &getTok() const { return Tok; }
   llvm::Value *codegen() override; // Step 3: read the variable
+  bool isAssignable() const override { return true; }      // Step 10
+  std::string targetName() const override { return Name; } // Step 10
+  llvm::Value *codegenAddress(llvm::Type **Ty) override;   // Step 12
+  llvm::Value *codegenArrayRef(llvm::Type **ArrTy) override; // Step 13
   std::string to_string() const override { return "VarRef '" + Name + "'"; }
 };
 
 /// ParamAST - Class for a parameter declaration
+/// (Step 13: Dims is empty for a scalar, or holds the sizes of an array
+/// parameter such as "int a[10]"; a first size of 0 means "int a[]".)
 class ParamAST {
   std::string Name;
   std::string Type;
+  std::vector<int> Dims;
 
 public:
-  ParamAST(const std::string &name, const std::string &type)
-      : Name(name), Type(type) {}
+  ParamAST(const std::string &name, const std::string &type,
+           std::vector<int> dims = {})
+      : Name(name), Type(type), Dims(std::move(dims)) {}
   const std::string &getName() const { return Name; }
   const std::string &getType() const { return Type; }
-  std::string to_string() const { return "Param " + Type + " '" + Name + "'"; }
+  const std::vector<int> &getDims() const { return Dims; }
+  std::string to_string() const {
+    return "Param " + Type + " '" + Name + "'" + dimsToString(Dims);
+  }
 };
 
 /// DeclAST - Base class for declarations, variables and functions
@@ -139,18 +167,21 @@ public:
 };
 
 /// VarDeclAST - Class for a variable declaration
+/// (Step 10: Dims holds the sizes of an array, and is empty for a scalar.)
 class VarDeclAST : public DeclAST {
   std::unique_ptr<VariableASTnode> Var;
   std::string Type;
+  std::vector<int> Dims;
 
 public:
-  VarDeclAST(std::unique_ptr<VariableASTnode> var, const std::string &type)
-      : Var(std::move(var)), Type(type) {}
+  VarDeclAST(std::unique_ptr<VariableASTnode> var, const std::string &type,
+             std::vector<int> dims = {})
+      : Var(std::move(var)), Type(type), Dims(std::move(dims)) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
-  llvm::Value *codegen() override; // Step 3: declare a local
+  llvm::Value *codegen() override; // Step 3: declare a local (Step 11: or an array)
   std::string to_string() const override {
-    return "VarDecl " + Type + " '" + Var->getName() + "'";
+    return "VarDecl " + Type + " '" + Var->getName() + "'" + dimsToString(Dims);
   }
 };
 
@@ -158,15 +189,18 @@ public:
 class GlobVarDeclAST : public DeclAST {
   std::unique_ptr<VariableASTnode> Var;
   std::string Type;
+  std::vector<int> Dims; // Step 10: array sizes, empty for a scalar
 
 public:
-  GlobVarDeclAST(std::unique_ptr<VariableASTnode> var, const std::string &type)
-      : Var(std::move(var)), Type(type) {}
+  GlobVarDeclAST(std::unique_ptr<VariableASTnode> var, const std::string &type,
+                 std::vector<int> dims = {})
+      : Var(std::move(var)), Type(type), Dims(std::move(dims)) {}
   const std::string &getType() const { return Type; }
   const std::string &getName() const { return Var->getName(); }
-  llvm::Value *codegen() override; // Step 8: create the global
+  llvm::Value *codegen() override; // Step 8: create the global (Step 11: or an array)
   std::string to_string() const override {
-    return "GlobalVarDecl " + Type + " '" + Var->getName() + "'";
+    return "GlobalVarDecl " + Type + " '" + Var->getName() + "'" +
+           dimsToString(Dims);
   }
 };
 
@@ -248,19 +282,47 @@ public:
   }
 };
 
-/// AssignAST - Assignment to a variable, e.g. x = expr
-/// (also added in Part 1, so that "x = 1" is not confused with a plain
-/// expression that happens to start with x).
+/// AssignAST - Assignment "target = expr". In Part 1 the target was always a
+/// plain variable. Step 10 widens it to any assignable node, so that array
+/// elements like a[i][j] can be assigned too; Tok is the "=" token.
 class AssignAST : public ASTnode {
-  std::unique_ptr<VariableASTnode> Var;
+  TOKEN Tok;
+  std::unique_ptr<ASTnode> Target;
   std::unique_ptr<ASTnode> Val;
 
 public:
-  AssignAST(std::unique_ptr<VariableASTnode> var, std::unique_ptr<ASTnode> val)
-      : Var(std::move(var)), Val(std::move(val)) {}
-  llvm::Value *codegen() override; // Step 3: store into the variable
+  AssignAST(TOKEN eqTok, std::unique_ptr<ASTnode> target,
+            std::unique_ptr<ASTnode> val)
+      : Tok(eqTok), Target(std::move(target)), Val(std::move(val)) {}
+  llvm::Value *codegen() override; // Step 3: store into the variable (Step 12: or element)
   std::string to_string() const override {
-    return treeNode("Assign", {nodeToString(Var.get()), nodeToString(Val.get())});
+    return treeNode("Assign",
+                    {nodeToString(Target.get()), nodeToString(Val.get())});
+  }
+};
+
+/// ArrayAccessAST - An array element or row, e.g. a[i], m[i][j * 2]
+/// (Step 10). Every index is an expression; how many there are against how
+/// many dimensions the array has is checked in codegen (Step 12).
+class ArrayAccessAST : public ASTnode {
+  TOKEN Tok;
+  std::string Name;
+  std::vector<std::unique_ptr<ASTnode>> Indices;
+
+public:
+  ArrayAccessAST(TOKEN tok, const std::string &name,
+                 std::vector<std::unique_ptr<ASTnode>> indices)
+      : Tok(tok), Name(name), Indices(std::move(indices)) {}
+  llvm::Value *codegen() override;                           // Step 12
+  bool isAssignable() const override { return true; }        // Step 10
+  std::string targetName() const override { return Name + "[...]"; }
+  llvm::Value *codegenAddress(llvm::Type **Ty) override;     // Step 12
+  llvm::Value *codegenArrayRef(llvm::Type **ArrTy) override; // Step 13
+  std::string to_string() const override {
+    std::vector<std::string> kids;
+    for (const auto &index : Indices)
+      kids.push_back(labelled("Index", nodeToString(index.get())));
+    return treeNode("ArrayAccess '" + Name + "'", kids);
   }
 };
 

@@ -462,34 +462,50 @@ Value *VariableASTnode::codegen() {
   return Builder.CreateLoad(Var.Ty, Var.Ptr, Name);
 }
 
-// Step 3. Assignment "x = e". The target is looked up first so that
+// Step 3. Assignment "x = e". The target's address is found first, so that
 // assigning to an undeclared name is reported before we generate anything
 // for the right-hand side. Then e is generated, and it must have a value
-// (a void call cannot be assigned). The value is widened to the variable's
+// (a void call cannot be assigned). The value is widened to the target's
 // type, so "float f; f = 1;" stores 1.0, while narrowing such as storing a
 // float into an int is rejected, as MiniC only allows widening.
 //
 // In C an assignment is itself an expression whose value is what was
 // stored. Returning that value is what makes "a = b = 3" work: the inner
 // assignment hands 3 to the outer one.
+//
+// Step 10. The target used to be a plain variable. Now it can also be an
+// array element, so instead of looking up a name this asks the target node
+// for its address (codegenAddress), and each kind of target knows how to
+// find its own: a variable returns its slot, an element computes a GEP
+// (Step 12).
 Value *AssignAST::codegen() {
-  const std::string &Name = Var->getName();
-  VarInfo Target = lookupVariable(Name);
-  if (!Target.Ptr)
-    return SemanticError(Var->getTok(), "undeclared name",
-                         "assignment to undeclared variable '" + Name + "'");
+  llvm::Type *TargetTy = nullptr;
+  Value *Addr = Target->codegenAddress(&TargetTy);
+  std::string Name = Target->targetName();
 
-  Value *RHS = requireValue(Val->codegen(), Var->getTok(),
+  Value *RHS = requireValue(Val->codegen(), Tok,
                             "the right-hand side of the assignment to '" +
                                 Name + "'");
-  Value *Widened = widen(RHS, Target.Ty);
+  Value *Widened = widen(RHS, TargetTy);
   if (!Widened)
-    return SemanticError(Var->getTok(), "type",
+    return SemanticError(Tok, "type",
                          "cannot assign " + typeName(RHS->getType()) + " to " +
-                             typeName(Target.Ty) + " variable '" + Name +
+                             typeName(TargetTy) + " '" + Name +
                              "' (narrowing conversion)");
-  Builder.CreateStore(Widened, Target.Ptr);
+  Builder.CreateStore(Widened, Addr);
   return Widened;
+}
+
+// Step 10. The address of a plain variable as an assignment target is its
+// slot, and the variable must be declared. (Step 12 adds one more check
+// here: a whole array cannot be assigned.)
+Value *VariableASTnode::codegenAddress(llvm::Type **Ty) {
+  VarInfo Var = lookupVariable(Name);
+  if (!Var.Ptr)
+    return SemanticError(Tok, "undeclared name",
+                         "assignment to undeclared variable '" + Name + "'");
+  *Ty = Var.Ty;
+  return Var.Ptr;
 }
 
 //===----------------------------------------------------------------------===//
@@ -860,3 +876,26 @@ Value *GlobVarDeclAST::codegen() {
   GlobalNamedValues[Name] = G;
   return G;
 }
+
+//===----------------------------------------------------------------------===//
+// Step 10 - temporary placeholders until Steps 11 to 13
+//
+// ast.h now declares these functions, so they must exist for the program to
+// link. Until arrays get real code, using one is reported as an error, which
+// keeps every Part 2 program working while the parser already accepts
+// array syntax. Steps 12 and 13 replace this whole section.
+//===----------------------------------------------------------------------===//
+
+Value *ArrayAccessAST::codegen() {
+  return SemanticError(Tok, "invalid array use",
+                       "array elements are not supported yet (Steps 11-12)");
+}
+
+Value *ArrayAccessAST::codegenAddress(llvm::Type **Ty) {
+  return SemanticError(Tok, "invalid array use",
+                       "array elements are not supported yet (Steps 11-12)");
+}
+
+Value *ArrayAccessAST::codegenArrayRef(llvm::Type **ArrTy) { return nullptr; }
+
+Value *VariableASTnode::codegenArrayRef(llvm::Type **ArrTy) { return nullptr; }

@@ -91,3 +91,14 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &os, const ASTnode &ast) {
   os << ast.to_string();
   return os;
 }
+
+std::string dimsToString(const std::vector<int> &dims) {
+  std::string out;
+  for (int d : dims) {
+    if (d == 0)
+      out += "[]";
+    else
+      out += "[" + std::to_string(d) + "]";
+  }
+  return out;
+}

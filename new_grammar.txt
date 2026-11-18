@@ -1,3 +1,5 @@
+// ===== Part 1-2 grammar: unchanged =====
+
 program      ::= extern_list decl_list
 
 extern_list  ::= extern extern_list
@@ -11,8 +13,6 @@ decl_list'   ::= decl decl_list'
 
 decl         ::= "void" IDENT "(" params ")" block
                | var_type IDENT decl_tail
-decl_tail    ::= ";"
-               | "(" params ")" block
 
 type_spec    ::= "void"
                | var_type
@@ -27,14 +27,10 @@ param_list   ::= param param_list'
 param_list'  ::= "," param param_list'
                | epsilon
 
-param        ::= var_type IDENT
-
 block        ::= "{" local_decls stmt_list "}"
 
 local_decls  ::= local_decl local_decls
                | epsilon
-
-local_decl   ::= var_type IDENT ";"
 
 stmt_list    ::= stmt stmt_list
                | epsilon
@@ -58,9 +54,6 @@ else_stmt    ::= "else" block
 return_stmt  ::= "return" return_tail
 return_tail  ::= ";"
                | expr ";"
-
-expr         ::= IDENT "=" expr
-               | rval
 
 rval         ::= and_expr rval'
 rval'        ::= "||" and_expr rval'
@@ -103,12 +96,41 @@ primary      ::= "(" expr ")"
                | FLOAT_LIT
                | BOOL_LIT
 
-ident_tail   ::= "(" args ")"
-               | epsilon
-
 args         ::= arg_list
                | epsilon
 
 arg_list     ::= expr arg_list'
 arg_list'    ::= "," expr arg_list'
+               | epsilon
+
+// ===== Part 3 (arrays): changed rules, these replace the Part 1-2 versions =====
+
+decl_tail    ::= dims ";"
+               | "(" params ")" block
+
+param        ::= var_type IDENT param_dims
+
+local_decl   ::= var_type IDENT dims ";"
+
+expr         ::= rval expr_tail
+
+ident_tail   ::= "(" args ")"
+               | "[" expr "]" indices
+               | epsilon
+
+// ===== Part 3 (arrays): new rules =====
+
+dims         ::= "[" INT_LIT "]" dims
+               | epsilon
+
+param_dims   ::= "[" dim_size "]" dims
+               | epsilon
+
+dim_size     ::= INT_LIT
+               | epsilon
+
+expr_tail    ::= "=" expr
+               | epsilon
+
+indices      ::= "[" expr "]" indices
                | epsilon
